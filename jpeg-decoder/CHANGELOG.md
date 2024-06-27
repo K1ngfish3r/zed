@@ -2,7 +2,64 @@
 All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](http://semver.org/).
 
-## Unreleased
+## v0.3.1 (2024-01-13)
+
+- Added a WASM SIMD implementation.
+- Allow reading the XMP packet.
+- Admit more precision values in JPEG Lossless.
+
+## v0.3.0 (2022-10-17)
+
+- The MSRV policy is now managed by the `rust-version` field in `Cargo.toml`.
+- The color transform can now be overridden as well as hinted with
+  `Decoder::set_color_transform`.
+
+## v0.2.6 (2022-05-09)
+
+- Another fix to allow usage in WASM target.
+- Decoding in the WASM target is now actively tested in CI.
+
+## v0.2.5 (2022-05-02)
+
+- Fix single threaded usage in WASM target.
+
+## v0.2.4 (2022-04-01)
+
+- Corrects minimal version requirements of dependency `rayon`.
+
+## v0.2.3 (2022-02-14)
+
+- Added `Decoder::set_max_decoding_buffer_size` which limits the bytes
+  allocated for the output of the decoding process.
+- Added Arm64-Neon intrinsic implementation of idct and color conversion. This
+  depends on a Rust nightly compiler feature ([`aarch64_target_feature`]) and
+  it must be explicitly enabled. As soon as the minimum supported Rust version
+  includes the stabilization of this feature, the code will be enabled by
+  default and the feature changed to do nothing.
+
+[`aarch64_target_feature`]: https://github.com/rust-lang/rust/issues/90620
+
+## v0.2.2 (2022-02-12)
+
+- Added and SSE3-specific SIMD intrinsic implementation for idct and color
+  conversion. It will run if applicable targets are detect at _runtime_.
+- The SIMD implementation is not bit-for-bit compatible with non-SIMD output.
+  You can enable the `platform_independent` feature, to ensure that only
+  bit-for-bit equivalent code runs and output is the same on all platforms.
+- Improved performance some more by avoiding bounds checks with array types.
+- Multithreading is now used more frequently, without the rayon target, except
+  on an explicit list of unsupported platforms.
+
+## v0.2.1 (2022-12-09)
+
+- Fix decoding error due to conflict of lossless with some spectral selections.
+
+## v0.2.0 (2021-12-04)
+
+- Added Lossless JPEG support
+- Added support for EXIF and ICC data
+- Minimum supported rust version changed to 1.48 and no formal policy for bump releases for now
+- Minor stability fixes on invalid jpeg images
 
 ## v0.1.22 (2021-01-27)
 

@@ -4,10 +4,9 @@
 //! lossless and lossy compression.
 //!
 //! # Related Links
-//! * <https://www.adobe.io/open/standards/TIFF.html> - The TIFF specification
+//! * <https://web.archive.org/web/20210108073850/https://www.adobe.io/open/standards/TIFF.html> - The TIFF specification
 
 extern crate jpeg;
-extern crate miniz_oxide;
 extern crate weezl;
 
 mod bytecast;
@@ -16,7 +15,7 @@ pub mod encoder;
 mod error;
 pub mod tags;
 
-pub use self::error::{InflateError, TiffError, TiffFormatError, TiffResult, TiffUnsupportedError};
+pub use self::error::{TiffError, TiffFormatError, TiffResult, TiffUnsupportedError, UsageError};
 
 /// An enumeration over supported color types and their bit depths
 #[derive(Copy, PartialEq, Eq, Debug, Clone, Hash)]
@@ -38,4 +37,7 @@ pub enum ColorType {
 
     /// Pixel is CMYK
     CMYK(u8),
+
+    /// Pixel is YCbCr
+    YCbCr(u8),
 }

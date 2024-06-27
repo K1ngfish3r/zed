@@ -6,8 +6,8 @@ use std::io::Write;
 
 use super::AutoBreak;
 use super::{ArbitraryHeader, ArbitraryTuplType, BitmapHeader, GraymapHeader, PixmapHeader};
-use super::{HeaderRecord, PnmHeader, PNMSubtype, SampleEncoding};
-use crate::color::{ColorType, ExtendedColorType};
+use super::{HeaderRecord, PnmHeader, PnmSubtype, SampleEncoding};
+use crate::color::ExtendedColorType;
 use crate::error::{
     ImageError, ImageResult, ParameterError, ParameterErrorKind, UnsupportedError,
     UnsupportedErrorKind,
@@ -18,7 +18,7 @@ use byteorder::{BigEndian, WriteBytesExt};
 
 enum HeaderStrategy {
     Dynamic,
-    Subtype(PNMSubtype),
+    Subtype(PnmSubtype),
     Chosen(PnmHeader),
 }
 
@@ -33,17 +33,6 @@ pub struct PnmEncoder<W: Write> {
     writer: W,
     header: HeaderStrategy,
 }
-
-/// PNM Encoder
-///
-/// An alias of [`PnmEncoder`].
-///
-/// TODO: remove
-///
-/// [`PnmEncoder`]: struct.PnmEncoder.html
-#[allow(dead_code)]
-#[deprecated(note = "Use `PnmEncoder` instead")]
-pub type PNMEncoder<W> = PnmEncoder<W>;
 
 /// Encapsulate the checking system in the type system. Non of the fields are actually accessed
 /// but requiring them forces us to validly construct the struct anyways.
@@ -90,7 +79,7 @@ enum TupleEncoding<'a> {
 }
 
 impl<W: Write> PnmEncoder<W> {
-    /// Create new PNMEncoder from the `writer`.
+    /// Create new PnmEncoder from the `writer`.
     ///
     /// The encoded images will have some `pnm` format. If more control over the image type is
     /// required, use either one of `with_subtype` or `with_header`. For more information on the
@@ -109,7 +98,7 @@ impl<W: Write> PnmEncoder<W> {
     /// RGB image as Graymap) will result in an error.
     ///
     /// This will overwrite the effect of earlier calls to `with_header` and `with_dynamic_header`.
-    pub fn with_subtype(self, subtype: PNMSubtype) -> Self {
+    pub fn with_subtype(self, subtype: PnmSubtype) -> Self {
         PnmEncoder {
             writer: self.writer,
             header: HeaderStrategy::Subtype(subtype),
@@ -155,19 +144,19 @@ impl<W: Write> PnmEncoder<W> {
         image: S,
         width: u32,
         height: u32,
-        color: ColorType,
+        color: ExtendedColorType,
     ) -> ImageResult<()>
     where
         S: Into<FlatSamples<'s>>,
     {
         let image = image.into();
         match self.header {
-            HeaderStrategy::Dynamic => self.write_dynamic_header(image, width, height, color.into()),
+            HeaderStrategy::Dynamic => self.write_dynamic_header(image, width, height, color),
             HeaderStrategy::Subtype(subtype) => {
-                self.write_subtyped_header(subtype, image, width, height, color.into())
+                self.write_subtyped_header(subtype, image, width, height, color)
             }
             HeaderStrategy::Chosen(ref header) => {
-                Self::write_with_header(&mut self.writer, header, image, width, height, color.into())
+                Self::write_with_header(&mut self.writer, header, image, width, height, color)
             }
         }
     }
@@ -221,17 +210,17 @@ impl<W: Write> PnmEncoder<W> {
     /// Try to encode the image with the chosen format, give its corresponding pixel encoding type.
     fn write_subtyped_header(
         &mut self,
-        subtype: PNMSubtype,
+        subtype: PnmSubtype,
         image: FlatSamples,
         width: u32,
         height: u32,
         color: ExtendedColorType,
     ) -> ImageResult<()> {
         let header = match (subtype, color) {
-            (PNMSubtype::ArbitraryMap, color) => {
+            (PnmSubtype::ArbitraryMap, color) => {
                 return self.write_dynamic_header(image, width, height, color)
             }
-            (PNMSubtype::Pixmap(encoding), ExtendedColorType::Rgb8) => PnmHeader {
+            (PnmSubtype::Pixmap(encoding), ExtendedColorType::Rgb8) => PnmHeader {
                 decoded: HeaderRecord::Pixmap(PixmapHeader {
                     encoding,
                     width,
@@ -240,7 +229,7 @@ impl<W: Write> PnmEncoder<W> {
                 }),
                 encoded: None,
             },
-            (PNMSubtype::Graymap(encoding), ExtendedColorType::L8) => PnmHeader {
+            (PnmSubtype::Graymap(encoding), ExtendedColorType::L8) => PnmHeader {
                 decoded: HeaderRecord::Graymap(GraymapHeader {
                     encoding,
                     width,
@@ -249,8 +238,8 @@ impl<W: Write> PnmEncoder<W> {
                 }),
                 encoded: None,
             },
-            (PNMSubtype::Bitmap(encoding), ExtendedColorType::L8)
-            | (PNMSubtype::Bitmap(encoding), ExtendedColorType::L1) => PnmHeader {
+            (PnmSubtype::Bitmap(encoding), ExtendedColorType::L8)
+            | (PnmSubtype::Bitmap(encoding), ExtendedColorType::L1) => PnmHeader {
                 decoded: HeaderRecord::Bitmap(BitmapHeader {
                     encoding,
                     width,
@@ -293,13 +282,22 @@ impl<W: Write> PnmEncoder<W> {
 }
 
 impl<W: Write> ImageEncoder for PnmEncoder<W> {
+    #[track_caller]
     fn write_image(
         mut self,
         buf: &[u8],
         width: u32,
         height: u32,
-        color_type: ColorType,
+        color_type: ExtendedColorType,
     ) -> ImageResult<()> {
+        let expected_buffer_len = color_type.buffer_size(width, height);
+        assert_eq!(
+            expected_buffer_len,
+            buf.len() as u64,
+            "Invalid buffer length: expected {expected_buffer_len} got {} for {width}x{height} image",
+            buf.len(),
+        );
+
         self.encode(buf, width, height, color_type)
     }
 }
@@ -355,7 +353,7 @@ impl<'a> UncheckedHeader<'a> {
 
 impl<'a> CheckedDimensions<'a> {
     // Check color compatibility with the header. This will only error when we are certain that
-    // the comination is bogus (e.g. combining Pixmap and Palette) but allows uncertain
+    // the combination is bogus (e.g. combining Pixmap and Palette) but allows uncertain
     // combinations (basically a ArbitraryTuplType::Custom with any color of fitting depth).
     fn check_header_color(self, color: ExtendedColorType) -> ImageResult<CheckedHeaderColor<'a>> {
         let components = u32::from(color.channel_count());
@@ -465,14 +463,11 @@ impl<'a> CheckedHeaderColor<'a> {
             | ExtendedColorType::Rgb8
             | ExtendedColorType::Rgba8
             | ExtendedColorType::Bgr8
-            | ExtendedColorType::Bgra8
-                => 0xff,
+            | ExtendedColorType::Bgra8 => 0xff,
             ExtendedColorType::L16
             | ExtendedColorType::La16
             | ExtendedColorType::Rgb16
-            | ExtendedColorType::Rgba16
-                => 0xffff,
-            ExtendedColorType::__NonExhaustive(marker) => match marker._private {},
+            | ExtendedColorType::Rgba16 => 0xffff,
             _ => {
                 // Unsupported target color type.
                 return Err(ImageError::Unsupported(
@@ -659,13 +654,11 @@ impl<'a> TupleEncoding<'a> {
             } => writer.write_all(samples).map_err(ImageError::IoError),
             TupleEncoding::Bytes {
                 samples: FlatSamples::U16(samples),
-            } => samples
-                .iter()
-                .try_for_each(|&sample| {
-                    writer
-                        .write_u16::<BigEndian>(sample)
-                        .map_err(ImageError::IoError)
-                }),
+            } => samples.iter().try_for_each(|&sample| {
+                writer
+                    .write_u16::<BigEndian>(sample)
+                    .map_err(ImageError::IoError)
+            }),
 
             TupleEncoding::Ascii {
                 samples: FlatSamples::U8(samples),
