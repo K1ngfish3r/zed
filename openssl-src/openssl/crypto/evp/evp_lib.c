@@ -1,5 +1,5 @@
 /*
- * Copyright 1995-2024 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1995-2023 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -81,12 +81,8 @@ int evp_cipher_param_to_asn1_ex(EVP_CIPHER_CTX *c, ASN1_TYPE *type,
                                 evp_cipher_aead_asn1_params *asn1_params)
 {
     int ret = -1;                /* Assume the worst */
-    const EVP_CIPHER *cipher;
+    const EVP_CIPHER *cipher = c->cipher;
 
-    if (c == NULL || c->cipher == NULL)
-        goto err;
-
-    cipher = c->cipher;
     /*
      * For legacy implementations, we detect custom AlgorithmIdentifier
      * parameter handling by checking if the function pointer
@@ -176,12 +172,8 @@ int evp_cipher_asn1_to_param_ex(EVP_CIPHER_CTX *c, ASN1_TYPE *type,
                                 evp_cipher_aead_asn1_params *asn1_params)
 {
     int ret = -1;                /* Assume the worst */
-    const EVP_CIPHER *cipher;
+    const EVP_CIPHER *cipher = c->cipher;
 
-    if (c == NULL || c->cipher == NULL)
-        goto err;
-
-    cipher = c->cipher;
     /*
      * For legacy implementations, we detect custom AlgorithmIdentifier
      * parameter handling by checking if there the function pointer
@@ -238,7 +230,6 @@ int evp_cipher_asn1_to_param_ex(EVP_CIPHER_CTX *c, ASN1_TYPE *type,
         ret = -2;
     }
 
-err:
     if (ret == -2)
         ERR_raise(ERR_LIB_EVP, EVP_R_UNSUPPORTED_CIPHER);
     else if (ret <= 0)
@@ -396,7 +387,7 @@ int evp_cipher_cache_constants(EVP_CIPHER *cipher)
 
 int EVP_CIPHER_get_block_size(const EVP_CIPHER *cipher)
 {
-    return (cipher == NULL) ? 0 : cipher->block_size;
+    return cipher->block_size;
 }
 
 int EVP_CIPHER_CTX_get_block_size(const EVP_CIPHER_CTX *ctx)
@@ -412,9 +403,6 @@ int EVP_CIPHER_impl_ctx_size(const EVP_CIPHER *e)
 int EVP_Cipher(EVP_CIPHER_CTX *ctx, unsigned char *out,
                const unsigned char *in, unsigned int inl)
 {
-    if (ctx == NULL || ctx->cipher == NULL)
-        return 0;
-
     if (ctx->cipher->prov != NULL) {
         /*
          * If the provided implementation has a ccipher function, we use it,
@@ -426,9 +414,6 @@ int EVP_Cipher(EVP_CIPHER_CTX *ctx, unsigned char *out,
         int ret = -1;
         size_t outl = 0;
         size_t blocksize = EVP_CIPHER_CTX_get_block_size(ctx);
-
-        if (blocksize == 0)
-            return 0;
 
         if (ctx->cipher->ccipher != NULL)
             ret =  ctx->cipher->ccipher(ctx->algctx, out, &outl,
@@ -469,7 +454,7 @@ EVP_CIPHER *EVP_CIPHER_CTX_get1_cipher(EVP_CIPHER_CTX *ctx)
 {
     EVP_CIPHER *cipher;
 
-    if (ctx == NULL || ctx->cipher == NULL)
+    if (ctx == NULL)
         return NULL;
     cipher = (EVP_CIPHER *)ctx->cipher;
     if (!EVP_CIPHER_up_ref(cipher))
@@ -484,7 +469,7 @@ int EVP_CIPHER_CTX_is_encrypting(const EVP_CIPHER_CTX *ctx)
 
 unsigned long EVP_CIPHER_get_flags(const EVP_CIPHER *cipher)
 {
-    return cipher == NULL ? 0 : cipher->flags;
+    return cipher->flags;
 }
 
 void *EVP_CIPHER_CTX_get_app_data(const EVP_CIPHER_CTX *ctx)
@@ -514,14 +499,11 @@ void *EVP_CIPHER_CTX_set_cipher_data(EVP_CIPHER_CTX *ctx, void *cipher_data)
 
 int EVP_CIPHER_get_iv_length(const EVP_CIPHER *cipher)
 {
-    return (cipher == NULL) ? 0 : cipher->iv_len;
+    return cipher->iv_len;
 }
 
 int EVP_CIPHER_CTX_get_iv_length(const EVP_CIPHER_CTX *ctx)
 {
-    if (ctx->cipher == NULL)
-        return 0;
-
     if (ctx->iv_len < 0) {
         int rv, len = EVP_CIPHER_get_iv_length(ctx->cipher);
         size_t v = len;
@@ -696,12 +678,12 @@ int EVP_CIPHER_CTX_get_key_length(const EVP_CIPHER_CTX *ctx)
 
 int EVP_CIPHER_get_nid(const EVP_CIPHER *cipher)
 {
-    return (cipher == NULL) ? NID_undef : cipher->nid;
+    return cipher->nid;
 }
 
 int EVP_CIPHER_CTX_get_nid(const EVP_CIPHER_CTX *ctx)
 {
-    return EVP_CIPHER_get_nid(ctx->cipher);
+    return ctx->cipher->nid;
 }
 
 int EVP_CIPHER_is_a(const EVP_CIPHER *cipher, const char *name)

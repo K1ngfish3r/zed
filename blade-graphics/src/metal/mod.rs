@@ -443,7 +443,7 @@ impl Context {
             raw_window_handle::RawWindowHandle::AppKit(handle) => {
                 Surface::from_view(handle.ns_view.as_ptr() as *mut _)
             }
-            _ => return Err(crate::NotSupportedError::PlatformNotSupported),
+            _ => return Err(crate::NotSupportedError::NoSupportedPlatformFound),
         };
 
         context.surface = Some(Mutex::new(surface));

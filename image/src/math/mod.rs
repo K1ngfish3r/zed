@@ -1,6 +1,7 @@
 //! Mathematical helper functions and types.
-mod rect;
-mod utils;
+pub mod nq;
+pub mod utils;
 
+mod rect;
 pub use self::rect::Rect;
-pub(super) use utils::resize_dimensions;
+pub(crate) use self::utils::resize_dimensions;

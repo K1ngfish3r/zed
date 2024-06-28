@@ -1,6 +1,4 @@
-use core::fmt;
-
-use alloc::{borrow::ToOwned, string::ToString};
+use std::fmt;
 
 use crate::{transform, uppercase};
 
@@ -67,6 +65,7 @@ mod tests {
     t!(test6: "SHOUTY_SNAKE_CASE" => "SHOUTY-SNAKE-CASE");
     t!(test7: "snake_case" => "SNAKE-CASE");
     t!(test8: "this-contains_ ALLKinds OfWord_Boundaries" => "THIS-CONTAINS-ALL-KINDS-OF-WORD-BOUNDARIES");
+    #[cfg(feature = "unicode")]
     t!(test9: "XΣXΣ baﬄe" => "XΣXΣ-BAFFLE");
     t!(test10: "XMLHttpRequest" => "XML-HTTP-REQUEST");
     t!(test11: "SHOUTY-KEBAB-CASE" => "SHOUTY-KEBAB-CASE");

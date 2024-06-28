@@ -19,7 +19,6 @@
 #include "internal/e_os.h"
 #include "internal/sockets.h"
 #include "internal/quic_tserver.h"
-#include "internal/quic_stream_map.h"
 #include "internal/time.h"
 
 static BIO *bio_err = NULL;

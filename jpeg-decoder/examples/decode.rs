@@ -21,34 +21,19 @@ fn main() {
     let mut data = decoder.decode().expect("Decoding failed. If other software can successfully decode the specified JPEG image, then it's likely that there is a bug in jpeg-decoder");
     let info = decoder.info().unwrap();
 
-    eprintln!("{:?}", info);
-    eprintln!("Exif: {}", decoder.exif_data().is_some());
-    eprintln!("XMP: {}", decoder.xmp_data().is_some());
-    eprintln!("ICC: {}", decoder.icc_profile().is_some());
-
     let output_file = File::create(output_path).unwrap();
     let mut encoder = png::Encoder::new(output_file, info.width as u32, info.height as u32);
+    encoder.set_depth(png::BitDepth::Eight);
 
     match info.pixel_format {
-        jpeg::PixelFormat::L16 => {
-            encoder.set_depth(png::BitDepth::Sixteen);
-            encoder.set_color(png::ColorType::Grayscale);
-        },
-        jpeg::PixelFormat::RGB24  => {
-            encoder.set_depth(png::BitDepth::Eight);
-            encoder.set_color(png::ColorType::RGB);
-        },
+        jpeg::PixelFormat::L8     => encoder.set_color(png::ColorType::Grayscale),
+        jpeg::PixelFormat::RGB24  => encoder.set_color(png::ColorType::RGB),
         jpeg::PixelFormat::CMYK32 => {
             data = cmyk_to_rgb(&mut data);
-            encoder.set_depth(png::BitDepth::Eight);
             encoder.set_color(png::ColorType::RGB)
         },
-        jpeg::PixelFormat::L8 => {
-            encoder.set_depth(png::BitDepth::Eight);
-            encoder.set_color(png::ColorType::Grayscale);
-        },
-    }
-    
+    };
+
     encoder.write_header()
            .expect("writing png header failed")
            .write_image_data(&data)

@@ -20,11 +20,6 @@ replace-with = "vendored-sources"
 git = "https://github.com/d1y/tree-sitter-go-work"
 replace-with = "vendored-sources"
 
-[source."git+https://github.com/kvark/blade?rev=21a56f780e21e4cb42c70a1dcf4b59842d1ad7f7"]
-git = "https://github.com/kvark/blade"
-rev = "21a56f780e21e4cb42c70a1dcf4b59842d1ad7f7"
-replace-with = "vendored-sources"
-
 [source."git+https://github.com/npmania/xim-rs?rev=27132caffc5b9bc9c432ca4afad184ab6e7c16af"]
 git = "https://github.com/npmania/xim-rs"
 rev = "27132caffc5b9bc9c432ca4afad184ab6e7c16af"
@@ -45,9 +40,9 @@ git = "https://github.com/rewinfrey/tree-sitter-proto"
 rev = "36d54f288aee112f13a67b550ad32634d0c2cb52"
 replace-with = "vendored-sources"
 
-[source."git+https://github.com/servo/pathfinder.git?rev=4968e819c0d9b015437ffc694511e175801a17c7"]
+[source."git+https://github.com/servo/pathfinder.git?rev=30419d07660dc11a21e42ef4a7fa329600cff152"]
 git = "https://github.com/servo/pathfinder.git"
-rev = "4968e819c0d9b015437ffc694511e175801a17c7"
+rev = "30419d07660dc11a21e42ef4a7fa329600cff152"
 replace-with = "vendored-sources"
 
 [source."git+https://github.com/tree-sitter/tree-sitter-go?rev=b82ab803d887002a0af11f6ce63d72884580bf33"]
@@ -68,6 +63,11 @@ replace-with = "vendored-sources"
 [source."git+https://github.com/zed-industries/async-pipe-rs?rev=82d00a04211cf4e1236029aa03e6b6ce2a74c553"]
 git = "https://github.com/zed-industries/async-pipe-rs"
 rev = "82d00a04211cf4e1236029aa03e6b6ce2a74c553"
+replace-with = "vendored-sources"
+
+[source."git+https://github.com/zed-industries/blade?rev=33fd51359d113c03b785e28f4a6cf75bacb0b26d"]
+git = "https://github.com/zed-industries/blade"
+rev = "33fd51359d113c03b785e28f4a6cf75bacb0b26d"
 replace-with = "vendored-sources"
 
 [source."git+https://github.com/zed-industries/font-kit?rev=5a5c4d4"]

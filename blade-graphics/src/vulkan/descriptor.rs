@@ -7,7 +7,6 @@ const COUNT_BASE: u32 = 16;
 #[derive(Debug)]
 pub struct DescriptorPool {
     sub_pools: Vec<vk::DescriptorPool>,
-    growth_iter: usize,
 }
 
 impl super::Device {
@@ -46,13 +45,10 @@ impl super::Device {
             max_inline_uniform_block_bindings: max_sets,
             ..Default::default()
         };
-
         let descriptor_pool_info = vk::DescriptorPoolCreateInfo::default()
             .max_sets(max_sets)
-            .flags(self.workarounds.extra_descriptor_pool_create_flags)
             .pool_sizes(&descriptor_sizes)
             .push_next(&mut inline_uniform_block_info);
-
         unsafe {
             self.core
                 .create_descriptor_pool(&descriptor_pool_info, None)
@@ -64,7 +60,6 @@ impl super::Device {
         let vk_pool = self.create_descriptor_sub_pool(COUNT_BASE);
         DescriptorPool {
             sub_pools: vec![vk_pool],
-            growth_iter: 0,
         }
     }
 
@@ -80,7 +75,6 @@ impl super::Device {
         layout: &super::DescriptorSetLayout,
     ) -> vk::DescriptorSet {
         let descriptor_set_layouts = [layout.raw];
-
         let mut descriptor_set_info = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(pool.sub_pools[0])
             .set_layouts(&descriptor_set_layouts);
@@ -91,9 +85,9 @@ impl super::Device {
             Err(other) => panic!("Unexpected descriptor allocation error: {:?}", other),
         };
 
-        let next_max_sets = COUNT_BASE.pow(pool.growth_iter as u32 + 1);
-        pool.growth_iter += 1;
+        let next_max_sets = COUNT_BASE.pow(pool.sub_pools.len() as u32 + 1);
         let vk_pool = self.create_descriptor_sub_pool(next_max_sets);
+        // Always insert in front to avoid expecting any overflows down the road
         pool.sub_pools.insert(0, vk_pool);
 
         descriptor_set_info.descriptor_pool = vk_pool;
@@ -106,16 +100,12 @@ impl super::Device {
     }
 
     pub(super) fn reset_descriptor_pool(&self, pool: &mut DescriptorPool) {
-        for vk_pool in pool.sub_pools.drain(1..) {
+        for &vk_pool in pool.sub_pools.iter() {
             unsafe {
-                self.core.destroy_descriptor_pool(vk_pool, None);
+                self.core
+                    .reset_descriptor_pool(vk_pool, vk::DescriptorPoolResetFlags::empty())
+                    .unwrap();
             }
-        }
-
-        unsafe {
-            self.core
-                .reset_descriptor_pool(pool.sub_pools[0], vk::DescriptorPoolResetFlags::empty())
-                .unwrap();
         }
     }
 }

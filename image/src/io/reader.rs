@@ -3,9 +3,9 @@ use std::io::{self, BufRead, BufReader, Cursor, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use crate::dynimage::DynamicImage;
-use crate::error::{ImageFormatHint, UnsupportedError, UnsupportedErrorKind};
 use crate::image::ImageFormat;
-use crate::{ImageDecoder, ImageError, ImageResult};
+use crate::error::{ImageFormatHint, UnsupportedError, UnsupportedErrorKind};
+use crate::{ImageError, ImageResult};
 
 use super::free_functions;
 
@@ -32,7 +32,8 @@ use super::free_functions;
 /// source is some blob in memory and you have constructed the reader in another way. Here is an
 /// example with a `pnm` black-and-white subformat that encodes its pixel matrix with ascii values.
 ///
-/// ```
+#[cfg_attr(feature = "pnm", doc = "```")]
+#[cfg_attr(not(feature = "pnm"), doc = "```no_run")]
 /// # use image::ImageError;
 /// # use image::io::Reader;
 /// # fn main() -> Result<(), ImageError> {
@@ -48,7 +49,6 @@ use super::free_functions;
 ///     .expect("Cursor io never fails");
 /// assert_eq!(reader.format(), Some(ImageFormat::Pnm));
 ///
-/// # #[cfg(feature = "pnm")]
 /// let image = reader.decode()?;
 /// # Ok(()) }
 /// ```
@@ -58,43 +58,33 @@ use super::free_functions;
 ///
 /// [`set_format`]: #method.set_format
 /// [`ImageDecoder`]: ../trait.ImageDecoder.html
-pub struct Reader<R: Read + Seek> {
-    /// The reader. Should be buffered.
+pub struct Reader<R: Read> {
+    /// The reader.
     inner: R,
     /// The format, if one has been set or deduced.
     format: Option<ImageFormat>,
-    /// Decoding limits
-    limits: super::Limits,
 }
 
-impl<'a, R: 'a + BufRead + Seek> Reader<R> {
+impl<R: Read> Reader<R> {
     /// Create a new image reader without a preset format.
-    ///
-    /// Assumes the reader is already buffered. For optimal performance,
-    /// consider wrapping the reader with a `BufReader::new()`.
     ///
     /// It is possible to guess the format based on the content of the read object with
     /// [`with_guessed_format`], or to set the format directly with [`set_format`].
     ///
     /// [`with_guessed_format`]: #method.with_guessed_format
     /// [`set_format`]: method.set_format
-    pub fn new(buffered_reader: R) -> Self {
+    pub fn new(reader: R) -> Self {
         Reader {
-            inner: buffered_reader,
+            inner: reader,
             format: None,
-            limits: super::Limits::default(),
         }
     }
 
     /// Construct a reader with specified format.
-    ///
-    /// Assumes the reader is already buffered. For optimal performance,
-    /// consider wrapping the reader with a `BufReader::new()`.
-    pub fn with_format(buffered_reader: R, format: ImageFormat) -> Self {
+    pub fn with_format(reader: R, format: ImageFormat) -> Self {
         Reader {
-            inner: buffered_reader,
+            inner: reader,
             format: Some(format),
-            limits: super::Limits::default(),
         }
     }
 
@@ -116,83 +106,35 @@ impl<'a, R: 'a + BufRead + Seek> Reader<R> {
         self.format = None;
     }
 
-    /// Disable all decoding limits.
-    pub fn no_limits(&mut self) {
-        self.limits = super::Limits::no_limits();
-    }
-
-    /// Set a custom set of decoding limits.
-    pub fn limits(&mut self, limits: super::Limits) {
-        self.limits = limits;
-    }
-
     /// Unwrap the reader.
     pub fn into_inner(self) -> R {
         self.inner
     }
+}
 
-    /// Makes a decoder.
+impl Reader<BufReader<File>> {
+    /// Open a file to read, format will be guessed from path.
     ///
-    /// For all formats except PNG, the limits are ignored and can be set with
-    /// ImageDecoder::set_limits after calling this function. PNG is handled specially because that
-    /// decoder has a different API which does not allow setting limits after construction.
-    fn make_decoder(
-        format: ImageFormat,
-        reader: R,
-        limits_for_png: super::Limits,
-    ) -> ImageResult<Box<dyn ImageDecoder + 'a>> {
-        #[allow(unused)]
-        use crate::codecs::*;
+    /// This will not attempt any io operation on the opened file.
+    ///
+    /// If you want to inspect the content for a better guess on the format, which does not depend
+    /// on file extensions, follow this call with a call to [`with_guessed_format`].
+    ///
+    /// [`with_guessed_format`]: #method.with_guessed_format
+    pub fn open<P>(path: P) -> io::Result<Self> where P: AsRef<Path> {
+        Self::open_impl(path.as_ref())
+    }
 
-        #[allow(unreachable_patterns)]
-        // Default is unreachable if all features are supported.
-        Ok(match format {
-            #[cfg(feature = "avif-native")]
-            ImageFormat::Avif => Box::new(avif::AvifDecoder::new(reader)?),
-            #[cfg(feature = "png")]
-            ImageFormat::Png => Box::new(png::PngDecoder::with_limits(reader, limits_for_png)?),
-            #[cfg(feature = "gif")]
-            ImageFormat::Gif => Box::new(gif::GifDecoder::new(reader)?),
-            #[cfg(feature = "jpeg")]
-            ImageFormat::Jpeg => Box::new(jpeg::JpegDecoder::new(reader)?),
-            #[cfg(feature = "webp")]
-            ImageFormat::WebP => Box::new(webp::WebPDecoder::new(reader)?),
-            #[cfg(feature = "tiff")]
-            ImageFormat::Tiff => Box::new(tiff::TiffDecoder::new(reader)?),
-            #[cfg(feature = "tga")]
-            ImageFormat::Tga => Box::new(tga::TgaDecoder::new(reader)?),
-            #[cfg(feature = "dds")]
-            ImageFormat::Dds => Box::new(dds::DdsDecoder::new(reader)?),
-            #[cfg(feature = "bmp")]
-            ImageFormat::Bmp => Box::new(bmp::BmpDecoder::new(reader)?),
-            #[cfg(feature = "ico")]
-            ImageFormat::Ico => Box::new(ico::IcoDecoder::new(reader)?),
-            #[cfg(feature = "hdr")]
-            ImageFormat::Hdr => Box::new(hdr::HdrDecoder::new(reader)?),
-            #[cfg(feature = "exr")]
-            ImageFormat::OpenExr => Box::new(openexr::OpenExrDecoder::new(reader)?),
-            #[cfg(feature = "pnm")]
-            ImageFormat::Pnm => Box::new(pnm::PnmDecoder::new(reader)?),
-            #[cfg(feature = "ff")]
-            ImageFormat::Farbfeld => Box::new(farbfeld::FarbfeldDecoder::new(reader)?),
-            #[cfg(feature = "qoi")]
-            ImageFormat::Qoi => Box::new(qoi::QoiDecoder::new(reader)?),
-            format => {
-                return Err(ImageError::Unsupported(
-                    ImageFormatHint::Exact(format).into(),
-                ))
-            }
+    fn open_impl(path: &Path) -> io::Result<Self> {
+        let file = File::open(path)?;
+        Ok(Reader {
+            inner: BufReader::new(file),
+            format: ImageFormat::from_path(path).ok(),
         })
     }
+}
 
-    /// Convert the reader into a decoder.
-    pub fn into_decoder(mut self) -> ImageResult<impl ImageDecoder + 'a> {
-        let mut decoder =
-            Self::make_decoder(self.require_format()?, self.inner, self.limits.clone())?;
-        decoder.set_limits(self.limits)?;
-        Ok(decoder)
-    }
-
+impl<R: BufRead + Seek> Reader<R> {
     /// Make a format guess based on the content, replacing it on success.
     ///
     /// Returns `Ok` with the guess if no io error occurs. Additionally, replaces the current
@@ -232,12 +174,11 @@ impl<'a, R: 'a + BufRead + Seek> Reader<R> {
         let mut start = [0; 16];
 
         // Save current offset, read start, restore offset.
-        let cur = self.inner.stream_position()?;
+        let cur = self.inner.seek(SeekFrom::Current(0))?;
         let len = io::copy(
             // Accept shorter files but read at most 16 bytes.
             &mut self.inner.by_ref().take(16),
-            &mut Cursor::new(&mut start[..]),
-        )?;
+            &mut Cursor::new(&mut start[..]))?;
         self.inner.seek(SeekFrom::Start(cur))?;
 
         Ok(free_functions::guess_format_impl(&start[..len as usize]))
@@ -248,8 +189,9 @@ impl<'a, R: 'a + BufRead + Seek> Reader<R> {
     /// Uses the current format to construct the correct reader for the format.
     ///
     /// If no format was determined, returns an `ImageError::Unsupported`.
-    pub fn into_dimensions(self) -> ImageResult<(u32, u32)> {
-        self.into_decoder().map(|d| d.dimensions())
+    pub fn into_dimensions(mut self) -> ImageResult<(u32, u32)> {
+        let format = self.require_format()?;
+        free_functions::image_dimensions_with_format_impl(self.inner, format)
     }
 
     /// Read the image (replaces `load`).
@@ -259,49 +201,13 @@ impl<'a, R: 'a + BufRead + Seek> Reader<R> {
     /// If no format was determined, returns an `ImageError::Unsupported`.
     pub fn decode(mut self) -> ImageResult<DynamicImage> {
         let format = self.require_format()?;
-
-        let mut limits = self.limits;
-        let mut decoder = Self::make_decoder(format, self.inner, limits.clone())?;
-
-        // Check that we do not allocate a bigger buffer than we are allowed to
-        // FIXME: should this rather go in `DynamicImage::from_decoder` somehow?
-        limits.reserve(decoder.total_bytes())?;
-        decoder.set_limits(limits)?;
-
-        DynamicImage::from_decoder(decoder)
+        free_functions::load(self.inner, format)
     }
 
     fn require_format(&mut self) -> ImageResult<ImageFormat> {
-        self.format.ok_or_else(|| {
+        self.format.ok_or_else(||
             ImageError::Unsupported(UnsupportedError::from_format_and_kind(
                 ImageFormatHint::Unknown,
-                UnsupportedErrorKind::Format(ImageFormatHint::Unknown),
-            ))
-        })
-    }
-}
-
-impl Reader<BufReader<File>> {
-    /// Open a file to read, format will be guessed from path.
-    ///
-    /// This will not attempt any io operation on the opened file.
-    ///
-    /// If you want to inspect the content for a better guess on the format, which does not depend
-    /// on file extensions, follow this call with a call to [`with_guessed_format`].
-    ///
-    /// [`with_guessed_format`]: #method.with_guessed_format
-    pub fn open<P>(path: P) -> io::Result<Self>
-    where
-        P: AsRef<Path>,
-    {
-        Self::open_impl(path.as_ref())
-    }
-
-    fn open_impl(path: &Path) -> io::Result<Self> {
-        Ok(Reader {
-            inner: BufReader::new(File::open(path)?),
-            format: ImageFormat::from_path(path).ok(),
-            limits: super::Limits::default(),
-        })
+                UnsupportedErrorKind::Format(ImageFormatHint::Unknown))))
     }
 }

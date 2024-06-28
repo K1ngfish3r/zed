@@ -1,5 +1,5 @@
 /*
- * Copyright 2022-2024 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2022-2023 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -13,7 +13,6 @@
 # include <openssl/ssl.h>
 # include "internal/quic_wire_pkt.h"
 # include "internal/quic_types.h"
-# include "internal/quic_predef.h"
 # include "internal/quic_record_util.h"
 # include "internal/quic_demux.h"
 
@@ -29,7 +28,7 @@ typedef struct ossl_qrx_args_st {
     OSSL_LIB_CTX   *libctx;
     const char     *propq;
 
-    /* Demux which owns the URXEs passed to us. */
+    /* Demux to receive datagrams from. */
     QUIC_DEMUX     *demux;
 
     /* Length of connection IDs used in short-header packets in bytes. */
@@ -66,6 +65,34 @@ void ossl_qrx_set_msg_callback(OSSL_QRX *qrx, ossl_msg_cb msg_callback,
                                SSL *msg_callback_ssl);
 void ossl_qrx_set_msg_callback_arg(OSSL_QRX *qrx,
                                    void *msg_callback_arg);
+
+/*
+ * DCID Management
+ * ===============
+ */
+
+/*
+ * Adds a given DCID to the QRX. The QRX will register the DCID with the demuxer
+ * so that incoming packets with that DCID are passed to the given QRX. Multiple
+ * DCIDs may be associated with a QRX at any one time. You will need to add at
+ * least one DCID after instantiating the QRX. A zero-length DCID is a valid
+ * input to this function. This function fails if the DCID is already
+ * registered.
+ *
+ * Returns 1 on success or 0 on error.
+ */
+int ossl_qrx_add_dst_conn_id(OSSL_QRX *qrx,
+                             const QUIC_CONN_ID *dst_conn_id);
+
+/*
+ * Remove a DCID previously registered with ossl_qrx_add_dst_conn_id. The DCID
+ * is unregistered from the demuxer. Fails if the DCID is not registered with
+ * the demuxer.
+ *
+ * Returns 1 on success or 0 on error.
+ */
+int ossl_qrx_remove_dst_conn_id(OSSL_QRX *qrx,
+                                const QUIC_CONN_ID *dst_conn_id);
 
 /*
  * Secret Management
@@ -179,7 +206,7 @@ int ossl_qrx_discard_enc_level(OSSL_QRX *qrx, uint32_t enc_level);
  */
 
 /* Information about a received packet. */
-struct ossl_qrx_pkt_st {
+typedef struct ossl_qrx_pkt_st {
     /*
      * Points to a logical representation of the decoded QUIC packet header. The
      * data and len fields point to the decrypted QUIC payload (i.e., to a
@@ -225,13 +252,7 @@ struct ossl_qrx_pkt_st {
      * packets.
      */
     uint64_t            key_epoch;
-
-    /*
-     * This monotonically increases with each datagram received.
-     * It is for diagnostic use only.
-     */
-    uint64_t            datagram_id;
-};
+} OSSL_QRX_PKT;
 
 /*
  * Tries to read a new decrypted packet from the QRX.

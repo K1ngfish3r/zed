@@ -99,13 +99,13 @@ pub enum NotSupportedError {
     ))]
     VulkanError(ash::vk::Result),
 
-    #[cfg(gles)]
+    #[cfg(any(gles, target_arch = "wasm32"))]
     GLESLoadingError(egl::LoadError<libloading::Error>),
-    #[cfg(gles)]
+    #[cfg(any(gles, target_arch = "wasm32"))]
     GLESError(egl::Error),
 
     NoSupportedDeviceFound,
-    PlatformNotSupported,
+    NoSupportedPlatformFound,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

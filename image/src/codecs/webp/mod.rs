@@ -1,7 +1,8 @@
-//! Decoding and Encoding of WebP Images
-
-mod decoder;
-mod encoder;
+//! Decoding of WebP Images
 
 pub use self::decoder::WebPDecoder;
-pub use self::encoder::WebPEncoder;
+
+mod decoder;
+mod transform;
+
+pub mod vp8;

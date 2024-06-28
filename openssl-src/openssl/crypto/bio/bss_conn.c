@@ -1,5 +1,5 @@
 /*
- * Copyright 1995-2024 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1995-2023 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -110,7 +110,7 @@ err:
 
 static int conn_state(BIO *b, BIO_CONNECT *c)
 {
-    int ret = -1, i, opts;
+    int ret = -1, i;
     BIO_info_cb *cb = NULL;
 
     if (c->info_callback != NULL)
@@ -188,12 +188,8 @@ static int conn_state(BIO *b, BIO_CONNECT *c)
         case BIO_CONN_S_CONNECT:
             BIO_clear_retry_flags(b);
             ERR_set_mark();
-
-            opts = c->connect_mode;
-            if (BIO_ADDRINFO_socktype(c->addr_iter) == SOCK_STREAM)
-                opts |= BIO_SOCK_KEEPALIVE;
-
-            ret = BIO_connect(b->num, BIO_ADDRINFO_address(c->addr_iter), opts);
+            ret = BIO_connect(b->num, BIO_ADDRINFO_address(c->addr_iter),
+                              BIO_SOCK_KEEPALIVE | c->connect_mode);
             b->retry_reason = 0;
             if (ret == 0) {
                 if (BIO_sock_should_retry(ret)) {

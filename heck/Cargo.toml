@@ -10,10 +10,10 @@
 # See Cargo.toml.orig for the original contents.
 
 [package]
-edition = "2021"
-rust-version = "1.56"
+edition = "2018"
 name = "heck"
-version = "0.5.0"
+version = "0.4.1"
+authors = ["Without Boats <woboats@gmail.com>"]
 include = [
     "src/**/*",
     "LICENSE-*",
@@ -21,6 +21,8 @@ include = [
     "CHANGELOG.md",
 ]
 description = "heck is a case conversion library."
+homepage = "https://github.com/withoutboats/heck"
+documentation = "https://docs.rs/heck"
 readme = "README.md"
 keywords = [
     "string",
@@ -29,6 +31,13 @@ keywords = [
     "snake",
     "unicode",
 ]
-categories = ["no-std"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/withoutboats/heck"
+
+[dependencies.unicode-segmentation]
+version = "1.2.0"
+optional = true
+
+[features]
+default = []
+unicode = ["unicode-segmentation"]

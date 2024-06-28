@@ -316,7 +316,7 @@ impl Context {
             }
             other => {
                 log::error!("Unsupported RDH {:?}", other);
-                return Err(crate::NotSupportedError::PlatformNotSupported);
+                return Err(crate::NotSupportedError::NoSupportedPlatformFound);
             }
         };
 
@@ -809,16 +809,6 @@ impl EglContext {
         capabilities.set(
             super::Capabilities::BUFFER_STORAGE,
             extensions.contains("GL_EXT_buffer_storage"),
-        );
-        capabilities.set(
-            super::Capabilities::DRAW_BUFFERS_INDEXED,
-            if gl.version().is_embedded {
-                (gl.version().major, gl.version().minor) >= (3, 2)
-            } else {
-                (gl.version().major, gl.version().minor) >= (3, 0)
-            },
-            // glow uses unsuffixed functions like glEnablei instead of glEnableiEXT.
-            // Therefore, GL_EXT_draw_buffers_indexed is not sufficient.
         );
 
         let limits = super::Limits {

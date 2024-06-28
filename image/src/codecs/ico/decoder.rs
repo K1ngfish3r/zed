@@ -1,16 +1,20 @@
 use byteorder::{LittleEndian, ReadBytesExt};
-use std::io::{BufRead, Read, Seek, SeekFrom};
-use std::{error, fmt};
+use std::convert::TryFrom;
+use std::io::{self, Cursor, Read, Seek, SeekFrom};
+use std::marker::PhantomData;
+use std::{error, fmt, mem};
 
 use crate::color::ColorType;
-use crate::error::{
-    DecodingError, ImageError, ImageResult, UnsupportedError, UnsupportedErrorKind,
-};
-use crate::image::{ImageDecoder, ImageFormat};
+use crate::error::{DecodingError, ImageError, ImageResult, UnsupportedError, UnsupportedErrorKind};
+use crate::image::{self, ImageDecoder, ImageFormat};
 
 use self::InnerDecoder::*;
-use crate::codecs::bmp::BmpDecoder;
-use crate::codecs::png::{PngDecoder, PNG_SIGNATURE};
+use crate::bmp::BmpDecoder;
+use crate::png::PngDecoder;
+
+// http://www.w3.org/TR/PNG-Structure.html
+// The first eight bytes of a PNG file always contain the following (decimal) values:
+const PNG_SIGNATURE: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
 
 /// Errors that can occur during decoding and parsing an ICO image or one of its enclosed images.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -37,35 +41,27 @@ enum DecoderError {
         /// The dimensions specified by the entry
         entry: (u16, u16),
         /// The dimensions of the image itself
-        image: (u32, u32),
+        image: (u32, u32)
     },
 }
 
 impl fmt::Display for DecoderError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            DecoderError::NoEntries => f.write_str("ICO directory contains no image"),
-            DecoderError::IcoEntryTooManyPlanesOrHotspot => {
-                f.write_str("ICO image entry has too many color planes or too large hotspot value")
-            }
-            DecoderError::IcoEntryTooManyBitsPerPixelOrHotspot => f.write_str(
-                "ICO image entry has too many bits per pixel or too large hotspot value",
-            ),
-            DecoderError::PngShorterThanHeader => {
-                f.write_str("Entry specified a length that is shorter than PNG header!")
-            }
-            DecoderError::PngNotRgba => f.write_str("The PNG is not in RGBA format!"),
-            DecoderError::InvalidDataSize => {
-                f.write_str("ICO image data size did not match expected size")
-            }
-            DecoderError::ImageEntryDimensionMismatch {
-                format,
-                entry,
-                image,
-            } => f.write_fmt(format_args!(
-                "Entry{:?} and {}{:?} dimensions do not match!",
-                entry, format, image
-            )),
+            DecoderError::NoEntries =>
+                f.write_str("ICO directory contains no image"),
+            DecoderError::IcoEntryTooManyPlanesOrHotspot =>
+                f.write_str("ICO image entry has too many color planes or too large hotspot value"),
+            DecoderError::IcoEntryTooManyBitsPerPixelOrHotspot =>
+                f.write_str("ICO image entry has too many bits per pixel or too large hotspot value"),
+            DecoderError::PngShorterThanHeader =>
+                f.write_str("Entry specified a length that is shorter than PNG header!"),
+            DecoderError::PngNotRgba =>
+                f.write_str("The PNG is not in RGBA format!"),
+            DecoderError::InvalidDataSize =>
+                f.write_str("ICO image data size did not match expected size"),
+            DecoderError::ImageEntryDimensionMismatch { format, entry, image } =>
+                f.write_fmt(format_args!("Entry{:?} and {}{:?} dimensions do not match!", entry, format, image)),
         }
     }
 }
@@ -96,9 +92,9 @@ impl fmt::Display for IcoEntryImageFormat {
     }
 }
 
-impl From<IcoEntryImageFormat> for ImageFormat {
-    fn from(val: IcoEntryImageFormat) -> Self {
-        match val {
+impl Into<ImageFormat> for IcoEntryImageFormat {
+    fn into(self) -> ImageFormat {
+        match self {
             IcoEntryImageFormat::Png => ImageFormat::Png,
             IcoEntryImageFormat::Bmp => ImageFormat::Bmp,
         }
@@ -106,14 +102,14 @@ impl From<IcoEntryImageFormat> for ImageFormat {
 }
 
 /// An ico decoder
-pub struct IcoDecoder<R: BufRead + Seek> {
+pub struct IcoDecoder<R: Read> {
     selected_entry: DirEntry,
     inner_decoder: InnerDecoder<R>,
 }
 
-enum InnerDecoder<R: BufRead + Seek> {
-    Bmp(BmpDecoder<R>),
-    Png(Box<PngDecoder<R>>),
+enum InnerDecoder<R: Read> {
+    BMP(BmpDecoder<R>),
+    PNG(PngDecoder<R>),
 }
 
 #[derive(Clone, Copy, Default)]
@@ -141,7 +137,7 @@ struct DirEntry {
     image_offset: u32,
 }
 
-impl<R: BufRead + Seek> IcoDecoder<R> {
+impl<R: Read + Seek> IcoDecoder<R> {
     /// Create a new decoder that decodes from the stream ```r```
     pub fn new(mut r: R) -> ImageResult<IcoDecoder<R>> {
         let entries = read_entries(&mut r)?;
@@ -229,8 +225,7 @@ impl DirEntry {
     }
 
     fn matches_dimensions(&self, width: u32, height: u32) -> bool {
-        u32::from(self.real_width()) == width.min(256)
-            && u32::from(self.real_height()) == height.min(256)
+        u32::from(self.real_width()) == width && u32::from(self.real_height()) == height
     }
 
     fn seek_to_start<R: Read + Seek>(&self, r: &mut R) -> ImageResult<()> {
@@ -248,37 +243,59 @@ impl DirEntry {
         Ok(signature == PNG_SIGNATURE)
     }
 
-    fn decoder<R: BufRead + Seek>(&self, mut r: R) -> ImageResult<InnerDecoder<R>> {
+    fn decoder<R: Read + Seek>(&self, mut r: R) -> ImageResult<InnerDecoder<R>> {
         let is_png = self.is_png(&mut r)?;
         self.seek_to_start(&mut r)?;
 
         if is_png {
-            Ok(Png(Box::new(PngDecoder::new(r)?)))
+            Ok(PNG(PngDecoder::new(r)?))
         } else {
-            Ok(Bmp(BmpDecoder::new_with_ico_format(r)?))
+            Ok(BMP(BmpDecoder::new_with_ico_format(r)?))
         }
     }
 }
 
-impl<R: BufRead + Seek> ImageDecoder for IcoDecoder<R> {
+/// Wrapper struct around a `Cursor<Vec<u8>>`
+pub struct IcoReader<R>(Cursor<Vec<u8>>, PhantomData<R>);
+impl<R> Read for IcoReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.0.read(buf)
+    }
+    fn read_to_end(&mut self, buf: &mut Vec<u8>) -> io::Result<usize> {
+        if self.0.position() == 0 && buf.is_empty() {
+            mem::swap(buf, self.0.get_mut());
+            Ok(buf.len())
+        } else {
+            self.0.read_to_end(buf)
+        }
+    }
+}
+
+impl<'a, R: 'a + Read + Seek> ImageDecoder<'a> for IcoDecoder<R> {
+    type Reader = IcoReader<R>;
+
     fn dimensions(&self) -> (u32, u32) {
         match self.inner_decoder {
-            Bmp(ref decoder) => decoder.dimensions(),
-            Png(ref decoder) => decoder.dimensions(),
+            BMP(ref decoder) => decoder.dimensions(),
+            PNG(ref decoder) => decoder.dimensions(),
         }
     }
 
     fn color_type(&self) -> ColorType {
         match self.inner_decoder {
-            Bmp(ref decoder) => decoder.color_type(),
-            Png(ref decoder) => decoder.color_type(),
+            BMP(ref decoder) => decoder.color_type(),
+            PNG(ref decoder) => decoder.color_type(),
         }
+    }
+
+    fn into_reader(self) -> ImageResult<Self::Reader> {
+        Ok(IcoReader(Cursor::new(image::decoder_to_vec(self)?), PhantomData))
     }
 
     fn read_image(self, buf: &mut [u8]) -> ImageResult<()> {
         assert_eq!(u64::try_from(buf.len()), Ok(self.total_bytes()));
         match self.inner_decoder {
-            Png(decoder) => {
+            PNG(decoder) => {
                 if self.selected_entry.image_length < PNG_SIGNATURE.len() as u32 {
                     return Err(DecoderError::PngShorterThanHeader.into());
                 }
@@ -288,13 +305,9 @@ impl<R: BufRead + Seek> ImageDecoder for IcoDecoder<R> {
                 if !self.selected_entry.matches_dimensions(width, height) {
                     return Err(DecoderError::ImageEntryDimensionMismatch {
                         format: IcoEntryImageFormat::Png,
-                        entry: (
-                            self.selected_entry.real_width(),
-                            self.selected_entry.real_height(),
-                        ),
-                        image: (width, height),
-                    }
-                    .into());
+                        entry: (self.selected_entry.real_width(), self.selected_entry.real_height()),
+                        image: (width, height)
+                    }.into());
                 }
 
                 // Embedded PNG images can only be of the 32BPP RGBA format.
@@ -305,36 +318,30 @@ impl<R: BufRead + Seek> ImageDecoder for IcoDecoder<R> {
 
                 decoder.read_image(buf)
             }
-            Bmp(mut decoder) => {
+            BMP(mut decoder) => {
                 let (width, height) = decoder.dimensions();
                 if !self.selected_entry.matches_dimensions(width, height) {
                     return Err(DecoderError::ImageEntryDimensionMismatch {
                         format: IcoEntryImageFormat::Bmp,
-                        entry: (
-                            self.selected_entry.real_width(),
-                            self.selected_entry.real_height(),
-                        ),
-                        image: (width, height),
-                    }
-                    .into());
+                        entry: (self.selected_entry.real_width(), self.selected_entry.real_height()),
+                        image: (width, height)
+                    }.into());
                 }
 
                 // The ICO decoder needs an alpha channel to apply the AND mask.
                 if decoder.color_type() != ColorType::Rgba8 {
-                    return Err(ImageError::Unsupported(
-                        UnsupportedError::from_format_and_kind(
-                            ImageFormat::Bmp.into(),
-                            UnsupportedErrorKind::Color(decoder.color_type().into()),
-                        ),
-                    ));
+                    return Err(ImageError::Unsupported(UnsupportedError::from_format_and_kind(
+                        ImageFormat::Bmp.into(),
+                        UnsupportedErrorKind::Color(decoder.color_type().into()),
+                    )));
                 }
 
                 decoder.read_image_data(buf)?;
 
                 let r = decoder.reader();
-                let image_end = r.stream_position()?;
-                let data_end = u64::from(self.selected_entry.image_offset)
-                    + u64::from(self.selected_entry.image_length);
+                let image_end = r.seek(SeekFrom::Current(0))?;
+                let data_end =
+                    u64::from(self.selected_entry.image_offset + self.selected_entry.image_length);
 
                 let mask_row_bytes = ((width + 31) / 32) * 4;
                 let mask_length = u64::from(mask_row_bytes) * u64::from(height);
@@ -375,73 +382,5 @@ impl<R: BufRead + Seek> ImageDecoder for IcoDecoder<R> {
                 }
             }
         }
-    }
-
-    fn read_image_boxed(self: Box<Self>, buf: &mut [u8]) -> ImageResult<()> {
-        (*self).read_image(buf)
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    // Test if BMP images without alpha channel inside ICOs don't panic.
-    // Because the test data is invalid decoding should produce an error.
-    #[test]
-    fn bmp_16_with_missing_alpha_channel() {
-        let data = vec![
-            0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x0e, 0x04, 0xc3, 0x7e, 0x00, 0x00, 0x00, 0x00,
-            0x7c, 0x00, 0x00, 0x00, 0x0e, 0x00, 0x00, 0x00, 0xf8, 0xff, 0xff, 0xff, 0x01, 0x00,
-            0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x8f, 0xf6, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x20, 0x66, 0x74, 0x83, 0x70, 0x61, 0x76, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
-            0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xeb, 0x00, 0x9b, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x4e, 0x47, 0x0d,
-            0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x62, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x0c,
-            0x00, 0x00, 0x00, 0xc3, 0x3f, 0x94, 0x61, 0xaa, 0x17, 0x4d, 0x8d, 0x79, 0x1d, 0x8b,
-            0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x14, 0x2e, 0x28, 0x40, 0xe5, 0x9f,
-            0x4b, 0x4d, 0xe9, 0x87, 0xd3, 0xda, 0xd6, 0x89, 0x81, 0xc5, 0xa4, 0xa1, 0x60, 0x98,
-            0x31, 0xc7, 0x1d, 0xb6, 0x8f, 0x20, 0xc8, 0x3e, 0xee, 0xd8, 0xe4, 0x8f, 0xee, 0x7b,
-            0x48, 0x9b, 0x88, 0x25, 0x13, 0xda, 0xa4, 0x13, 0xa4, 0x00, 0x00, 0x00, 0x00, 0x40,
-            0x16, 0x01, 0xff, 0xff, 0xff, 0xff, 0xe9, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0xa3, 0x66, 0x64, 0x41, 0x54, 0xa3, 0xa3, 0x00, 0x00, 0x00, 0xb8, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xa3, 0x66, 0x64, 0x41, 0x54, 0xa3, 0xa3,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x8f, 0xf6, 0xff, 0xff,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x83, 0x70, 0x61, 0x76,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff,
-            0xeb, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x62, 0x49,
-            0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0xff, 0xff, 0x94, 0xc8, 0x00, 0x02, 0x0c, 0x00, 0xff, 0xff, 0xc6,
-            0x84, 0x00, 0x2a, 0x75, 0x03, 0xa3, 0x05, 0xfb, 0xe1, 0x6e, 0xe8, 0x27, 0xd6, 0xd3,
-            0x96, 0xc1, 0xe4, 0x30, 0x0c, 0x05, 0xb9, 0xa3, 0x8b, 0x29, 0xda, 0xa4, 0xf1, 0x4d,
-            0xf3, 0xb2, 0x98, 0x2b, 0xe6, 0x93, 0x07, 0xf9, 0xca, 0x2b, 0xc2, 0x39, 0x20, 0xba,
-            0x7c, 0xa0, 0xb1, 0x43, 0xe6, 0xf9, 0xdc, 0xd1, 0xc2, 0x52, 0xdc, 0x41, 0xc1, 0x2f,
-            0x29, 0xf7, 0x46, 0x32, 0xda, 0x1b, 0x72, 0x8c, 0xe6, 0x2b, 0x01, 0xe5, 0x49, 0x21,
-            0x89, 0x89, 0xe4, 0x3d, 0xa1, 0xdb, 0x3b, 0x4a, 0x0b, 0x52, 0x86, 0x52, 0x33, 0x9d,
-            0xb2, 0xcf, 0x4a, 0x86, 0x53, 0xd7, 0xa9, 0x4b, 0xaf, 0x62, 0x06, 0x49, 0x53, 0x00,
-            0xc3, 0x3f, 0x94, 0x61, 0xaa, 0x17, 0x4d, 0x8d, 0x79, 0x1d, 0x8b, 0x10, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x14, 0x2e, 0x28, 0x40, 0xe5, 0x9f, 0x4b, 0x4d, 0xe9,
-            0x87, 0xd3, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xe7, 0xc5, 0x00,
-            0x02, 0x00, 0x00, 0x00, 0x06, 0x00, 0x0b, 0x00, 0x50, 0x31, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x76, 0x76, 0x01, 0x00, 0x00, 0x00, 0x76, 0x00,
-            0x00, 0x23, 0x3f, 0x52, 0x41, 0x44, 0x49, 0x41, 0x4e, 0x43, 0x45, 0x61, 0x50, 0x35,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x4d, 0x47, 0x49, 0x46, 0x38, 0x37, 0x61, 0x05,
-            0x50, 0x37, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc7, 0x37, 0x61,
-        ];
-
-        let decoder = IcoDecoder::new(std::io::Cursor::new(&data)).unwrap();
-        let mut buf = vec![0; usize::try_from(decoder.total_bytes()).unwrap()];
-        assert!(decoder.read_image(&mut buf).is_err());
     }
 }

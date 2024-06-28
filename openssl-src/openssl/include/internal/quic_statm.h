@@ -12,14 +12,13 @@
 
 # include <openssl/ssl.h>
 # include "internal/time.h"
-# include "internal/quic_predef.h"
 
 # ifndef OPENSSL_NO_QUIC
 
-struct ossl_statm_st {
+typedef struct ossl_statm_st {
     OSSL_TIME smoothed_rtt, latest_rtt, min_rtt, rtt_variance;
     char      have_first_sample;
-};
+} OSSL_STATM;
 
 typedef struct ossl_rtt_info_st {
     /* As defined in RFC 9002. */

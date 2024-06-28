@@ -1,22 +1,6 @@
 use glow::HasContext as _;
 use naga::back::glsl;
 
-fn separate<T: PartialEq>(mut iter: impl Iterator<Item = T>) -> bool {
-    if let Some(first) = iter.next() {
-        iter.all(|el| el == first)
-    } else {
-        false
-    }
-}
-
-fn conflate<T: PartialEq>(iter: impl Iterator<Item = T> + Clone) -> Box<[T]> {
-    if separate(iter.clone()) {
-        iter.collect()
-    } else {
-        iter.take(1).collect()
-    }
-}
-
 impl super::Context {
     unsafe fn create_pipeline(
         &self,
@@ -292,7 +276,6 @@ impl super::Context {
             program,
             group_mappings,
             vertex_attribute_infos: attributes.into_boxed_slice(),
-            color_targets: Box::new([]),
         }
     }
 
@@ -320,7 +303,7 @@ impl super::Context {
         } else {
             glsl::WriterFlags::empty()
         };
-        let mut inner = unsafe {
+        let inner = unsafe {
             self.create_pipeline(
                 &[desc.vertex, desc.fragment],
                 desc.data_layouts,
@@ -329,19 +312,6 @@ impl super::Context {
                 extra_flags,
             )
         };
-
-        inner.color_targets = conflate(desc.color_targets.iter().map(|t| (t.blend, t.write_mask)));
-
-        if !self
-            .capabilities
-            .contains(super::Capabilities::DRAW_BUFFERS_INDEXED)
-        {
-            assert!(
-                inner.color_targets.len() <= 1,
-                "separate blend states or write masks of multiple color targets are not supported"
-            );
-        }
-
         super::RenderPipeline {
             inner,
             topology: desc.primitive.topology,

@@ -1,12 +1,8 @@
-use alloc::borrow::ToOwned;
-use alloc::vec;
-use alloc::vec::Vec;
-use core::iter;
-use std::io::Read;
 use crate::read_u8;
-use crate::error::{Error, Result};
-use crate::marker::Marker;
-use crate::parser::ScanInfo;
+use error::{Error, Result};
+use marker::Marker;
+use parser::ScanInfo;
+use std::io::Read;
 
 const LUT_BITS: u8 = 8;
 
@@ -213,9 +209,8 @@ impl HuffmanTable {
             let bits_remaining = LUT_BITS - size;
             let start = (huffcode[i] << bits_remaining) as usize;
 
-            let val = (values[i], size);
-            for b in &mut lut[start..][..1 << bits_remaining] {
-                *b = val;
+            for j in 0 .. 1 << bits_remaining {
+                lut[start + j] = (values[i], size);
             }
         }
 
@@ -244,10 +239,10 @@ impl HuffmanTable {
 
         Ok(HuffmanTable {
             values: values.to_vec(),
-            delta,
-            maxcode,
-            lut,
-            ac_lut,
+            delta: delta,
+            maxcode: maxcode,
+            lut: lut,
+            ac_lut: ac_lut,
         })
     }
 }
@@ -258,7 +253,7 @@ fn derive_huffman_codes(bits: &[u8; 16]) -> Result<(Vec<u16>, Vec<u8>)> {
     let huffsize = bits.iter()
                        .enumerate()
                        .fold(Vec::new(), |mut acc, (i, &value)| {
-                           acc.extend(iter::repeat((i + 1) as u8).take(value as usize));
+                           acc.extend(std::iter::repeat((i + 1) as u8).take(value as usize));
                            acc
                        });
 

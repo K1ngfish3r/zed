@@ -2,21 +2,8 @@ extern crate num as num_renamed;
 #[macro_use]
 extern crate num_derive;
 
-use crate::num_renamed::{
-    Float, FromPrimitive, Num, NumCast, One, Signed, ToPrimitive, Unsigned, Zero,
-};
+use crate::num_renamed::{Float, FromPrimitive, Num, NumCast, One, ToPrimitive, Zero};
 use std::ops::Neg;
-
-#[derive(PartialEq, Zero, One, NumOps, Num, Unsigned)]
-struct MyNum(u32);
-
-#[test]
-fn test_derive_unsigned_works() {
-    fn do_nothing_on_unsigned(_input: impl Unsigned) {}
-
-    let x = MyNum(42);
-    do_nothing_on_unsigned(x);
-}
 
 #[derive(
     Debug,
@@ -32,7 +19,6 @@ fn test_derive_unsigned_works() {
     Zero,
     Num,
     Float,
-    Signed,
 )]
 struct MyFloat(f64);
 
@@ -100,9 +86,4 @@ fn test_num() {
 #[test]
 fn test_float() {
     assert_eq!(MyFloat(4.0).log(MyFloat(2.0)), MyFloat(2.0));
-}
-
-#[test]
-fn test_signed() {
-    assert!(MyFloat(-2.0).is_negative())
 }

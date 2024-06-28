@@ -1,6 +1,6 @@
 use crate::{
     error::{UnsupportedError, UnsupportedErrorKind},
-    ExtendedColorType, ImageError, ImageFormat, ImageResult,
+    ColorType, ImageError, ImageFormat, ImageResult,
 };
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{Read, Write};
@@ -41,22 +41,29 @@ impl ImageType {
 
     /// Check if the image format uses colors as opposed to gray scale.
     pub(crate) fn is_color(&self) -> bool {
-        matches! { *self,
+        match *self {
             ImageType::RawColorMap
             | ImageType::RawTrueColor
             | ImageType::RunTrueColor
-            | ImageType::RunColorMap
+            | ImageType::RunColorMap => true,
+            _ => false,
         }
     }
 
     /// Does the image use a color map.
     pub(crate) fn is_color_mapped(&self) -> bool {
-        matches! { *self, ImageType::RawColorMap | ImageType::RunColorMap }
+        match *self {
+            ImageType::RawColorMap | ImageType::RunColorMap => true,
+            _ => false,
+        }
     }
 
     /// Is the image run length encoded.
     pub(crate) fn is_encoded(&self) -> bool {
-        matches! {*self, ImageType::RunColorMap | ImageType::RunTrueColor | ImageType::RunGrayScale }
+        match *self {
+            ImageType::RunColorMap | ImageType::RunTrueColor | ImageType::RunGrayScale => true,
+            _ => false,
+        }
     }
 }
 
@@ -80,28 +87,23 @@ pub(crate) struct Header {
 impl Header {
     /// Load the header with values from pixel information.
     pub(crate) fn from_pixel_info(
-        color_type: ExtendedColorType,
+        color_type: ColorType,
         width: u16,
         height: u16,
-        use_rle: bool,
     ) -> ImageResult<Self> {
         let mut header = Self::default();
 
         if width > 0 && height > 0 {
-            let (num_alpha_bits, other_channel_bits, image_type) = match (color_type, use_rle) {
-                (ExtendedColorType::Rgba8, true) => (8, 24, ImageType::RunTrueColor),
-                (ExtendedColorType::Rgb8, true) => (0, 24, ImageType::RunTrueColor),
-                (ExtendedColorType::La8, true) => (8, 8, ImageType::RunGrayScale),
-                (ExtendedColorType::L8, true) => (0, 8, ImageType::RunGrayScale),
-                (ExtendedColorType::Rgba8, false) => (8, 24, ImageType::RawTrueColor),
-                (ExtendedColorType::Rgb8, false) => (0, 24, ImageType::RawTrueColor),
-                (ExtendedColorType::La8, false) => (8, 8, ImageType::RawGrayScale),
-                (ExtendedColorType::L8, false) => (0, 8, ImageType::RawGrayScale),
+            let (num_alpha_bits, other_channel_bits, image_type) = match color_type {
+                ColorType::Rgba8 | ColorType::Bgra8 => (8, 24, ImageType::RawTrueColor),
+                ColorType::Rgb8 | ColorType::Bgr8 => (0, 24, ImageType::RawTrueColor),
+                ColorType::La8 => (8, 8, ImageType::RawGrayScale),
+                ColorType::L8 => (0, 8, ImageType::RawGrayScale),
                 _ => {
                     return Err(ImageError::Unsupported(
                         UnsupportedError::from_format_and_kind(
                             ImageFormat::Tga.into(),
-                            UnsupportedErrorKind::Color(color_type),
+                            UnsupportedErrorKind::Color(color_type.into()),
                         ),
                     ))
                 }

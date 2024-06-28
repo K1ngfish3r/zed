@@ -16,13 +16,13 @@
 //! Load images using [`io::Reader`]:
 //!
 //! ```rust,no_run
-//! use std::io::Cursor;
+//! # use std::io::Cursor;
 //! use image::io::Reader as ImageReader;
 //! # fn main() -> Result<(), image::ImageError> {
 //! # let bytes = vec![0u8];
 //!
 //! let img = ImageReader::open("myimage.png")?.decode()?;
-//! let img2 = ImageReader::new(Cursor::new(bytes)).with_guessed_format()?.decode()?;
+//! let img2 = ImageReader::new(Cursor::new(bytes)).decode()?;
 //! # Ok(())
 //! # }
 //! ```
@@ -30,8 +30,9 @@
 //! And save them using [`save`] or [`write_to`] methods:
 //!
 //! ```rust,no_run
-//! # use std::io::{Write, Cursor};
-//! # use image::{DynamicImage, ImageFormat};
+//! # use std::io::Write;
+//! # use image::ImageOutputFormat;
+//! # use image::DynamicImage;
 //! # #[cfg(feature = "png")]
 //! # fn main() -> Result<(), image::ImageError> {
 //! # let img: DynamicImage = unimplemented!();
@@ -39,7 +40,7 @@
 //! img.save("empty.jpg")?;
 //!
 //! let mut bytes: Vec<u8> = Vec::new();
-//! img2.write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)?;
+//! img2.write_to(&mut bytes, image::ImageOutputFormat::Png)?;
 //! # Ok(())
 //! # }
 //! # #[cfg(not(feature = "png"))] fn main() {}
@@ -72,43 +73,14 @@
 //!
 //! # Low level encoding/decoding API
 //!
-//! Implementations of [`ImageEncoder`] provides low level control over encoding:
-//! ```rust,no_run
-//! # use std::io::Write;
-//! # use image::DynamicImage;
-//! # use image::ImageEncoder;
-//! # #[cfg(feature = "jpeg")]
-//! # fn main() -> Result<(), image::ImageError> {
-//! # use image::codecs::jpeg::JpegEncoder;
-//! # let img: DynamicImage = unimplemented!();
-//! # let writer: Box<dyn Write> = unimplemented!();
-//! let encoder = JpegEncoder::new_with_quality(&mut writer, 95);
-//! img.write_with_encoder(encoder)?;
-//! # Ok(())
-//! # }
-//! # #[cfg(not(feature = "jpeg"))] fn main() {}
-//! ```
-//! While [`ImageDecoder`] and [`ImageDecoderRect`] give access to more advanced decoding options:
+//! The [`ImageDecoder`] and [`ImageDecoderExt`] traits are implemented for many image file
+//! formats. They decode image data by directly on raw byte slices. Given an ImageDecoder, you can
+//! produce a DynamicImage via [`DynamicImage::from_decoder`].
 //!
-//! ```rust,no_run
-//! # use std::io::{BufReader, Cursor};
-//! # use image::DynamicImage;
-//! # use image::ImageDecoder;
-//! # #[cfg(feature = "png")]
-//! # fn main() -> Result<(), image::ImageError> {
-//! # use image::codecs::png::PngDecoder;
-//! # let img: DynamicImage = unimplemented!();
-//! # let reader: BufReader<Cursor<&[u8]>> = unimplemented!();
-//! let decoder = PngDecoder::new(&mut reader)?;
-//! let icc = decoder.icc_profile();
-//! let img = DynamicImage::from_decoder(decoder)?;
-//! # Ok(())
-//! # }
-//! # #[cfg(not(feature = "png"))] fn main() {}
-//! ```
+//! [`ImageEncoder`] provides the analogous functionality for encoding image data.
 //!
 //! [`DynamicImage::from_decoder`]: enum.DynamicImage.html#method.from_decoder
-//! [`ImageDecoderRect`]: trait.ImageDecoderRect.html
+//! [`ImageDecoderExt`]: trait.ImageDecoderExt.html
 //! [`ImageDecoder`]: trait.ImageDecoder.html
 //! [`ImageEncoder`]: trait.ImageEncoder.html
 #![warn(missing_docs)]
@@ -117,7 +89,10 @@
 #![deny(deprecated)]
 #![deny(missing_copy_implementations)]
 #![cfg_attr(all(test, feature = "benchmarks"), feature(test))]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+// it's a bit of a pain otherwise
+#![allow(clippy::many_single_char_names)]
+// it's a backwards compatibility break
+#![allow(clippy::wrong_self_convention, clippy::enum_variant_names)]
 
 #[cfg(all(test, feature = "benchmarks"))]
 extern crate test;
@@ -126,47 +101,44 @@ extern crate test;
 #[macro_use]
 extern crate quickcheck;
 
+use std::io::Write;
+
 pub use crate::color::{ColorType, ExtendedColorType};
 
-pub use crate::color::{Luma, LumaA, Rgb, Rgba};
+pub use crate::color::{Luma, LumaA, Rgb, Rgba, Bgr, Bgra};
 
 pub use crate::error::{ImageError, ImageResult};
 
-pub use crate::image::{
-    AnimationDecoder,
-    GenericImage,
-    GenericImageView,
-    ImageDecoder,
-    ImageDecoderRect,
-    ImageEncoder,
-    ImageFormat,
-    // Iterators
-    Pixels,
-    SubImage,
-};
+pub use crate::image::{AnimationDecoder,
+                GenericImage,
+                GenericImageView,
+                ImageDecoder,
+                ImageDecoderExt,
+                ImageEncoder,
+                ImageFormat,
+                ImageOutputFormat,
+                Progress,
+                // Iterators
+                Pixels,
+                SubImage};
 
 pub use crate::buffer_::{
-    GrayAlphaImage,
-    GrayImage,
-    // Image types
-    ImageBuffer,
-    Rgb32FImage,
-    RgbImage,
-    Rgba32FImage,
-    RgbaImage,
-};
+                 GrayAlphaImage,
+                 GrayImage,
+                 // Image types
+                 ImageBuffer,
+                 RgbImage,
+                 RgbaImage};
 
 pub use crate::flat::FlatSamples;
 
 // Traits
-pub use crate::traits::{EncodableLayout, Pixel, PixelWithColorType, Primitive};
+pub use crate::traits::{EncodableLayout, Primitive, Pixel};
 
 // Opening and loading images
-pub use crate::dynimage::{
-    image_dimensions, load_from_memory, load_from_memory_with_format, open, save_buffer,
-    save_buffer_with_format, write_buffer_with_format,
-};
 pub use crate::io::free_functions::{guess_format, load};
+pub use crate::dynimage::{load_from_memory, load_from_memory_with_format, open,
+                   save_buffer, save_buffer_with_format, image_dimensions};
 
 pub use crate::dynimage::DynamicImage;
 
@@ -179,12 +151,16 @@ pub mod error;
 pub mod buffer {
     // Only those not exported at the top-level
     pub use crate::buffer_::{
-        ConvertBuffer, EnumeratePixels, EnumeratePixelsMut, EnumerateRows, EnumerateRowsMut,
-        Pixels, PixelsMut, Rows, RowsMut,
+        ConvertBuffer,
+        EnumeratePixels,
+        EnumeratePixelsMut,
+        EnumerateRows,
+        EnumerateRowsMut,
+        Pixels,
+        PixelsMut,
+        Rows,
+        RowsMut,
     };
-
-    #[cfg(feature = "rayon")]
-    pub use crate::buffer_par::*;
 }
 
 // Math utils
@@ -203,27 +179,20 @@ pub mod flat;
 ///
 /// # Supported formats
 ///
-/// <!--- NOTE: Make sure to keep this table in sync with the README -->
-///
-/// | Format   | Decoding                                  | Encoding                                |
-/// | -------- | ----------------------------------------- | --------------------------------------- |
-/// | AVIF     | Yes (8-bit only) \*                       | Yes (lossy only)                        |
-/// | BMP      | Yes                                       | Yes                                     |
-/// | DDS      | Yes                                       | ---                                     |
-/// | Farbfeld | Yes                                       | Yes                                     |
-/// | GIF      | Yes                                       | Yes                                     |
-/// | HDR      | Yes                                       | Yes                                     |
-/// | ICO      | Yes                                       | Yes                                     |
-/// | JPEG     | Yes                                       | Yes                                     |
-/// | EXR      | Yes                                       | Yes                                     |
-/// | PNG      | Yes                                       | Yes                                     |
-/// | PNM      | Yes                                       | Yes                                     |
-/// | QOI      | Yes                                       | Yes                                     |
-/// | TGA      | Yes                                       | Yes                                     |
-/// | TIFF     | Yes                                       | Yes                                     |
-/// | WebP     | Yes                                       | Yes (lossless only)                     |
-///
-/// - \* Requires the `avif-native` feature, uses the libdav1d C library.
+/// | Format | Decoding | Encoding |
+/// | ------ | -------- | -------- |
+/// | PNG    | All supported color types | Same as decoding |
+/// | JPEG   | Baseline and progressive | Baseline JPEG |
+/// | GIF    | Yes | Yes |
+/// | BMP    | Yes | RGB8, RGBA8, Gray8, GrayA8 |
+/// | ICO    | Yes | Yes |
+/// | TIFF   | Baseline(no fax support) + LZW + PackBits | RGB8, RGBA8, Gray8 |
+/// | WebP   | Lossy(Luma channel only) | No |
+/// | AVIF   | Only 8-bit | Lossy |
+/// | PNM    | PBM, PGM, PPM, standard PAM | Yes |
+/// | DDS    | DXT1, DXT3, DXT5 | No |
+/// | TGA    | Yes | RGB8, RGBA8, BGR8, BGRA8, Gray8, GrayA8 |
+/// | farbfeld | Yes | Yes |
 ///
 /// ## A note on format specific features
 ///
@@ -247,13 +216,15 @@ pub mod flat;
 ///
 /// Re-exports of dependencies that reach version `1` will be discussed when it happens.
 pub mod codecs {
-    #[cfg(any(feature = "avif", feature = "avif-native"))]
+    #[cfg(any(feature = "avif-encoder", feature = "avif-decoder"))]
     pub mod avif;
     #[cfg(feature = "bmp")]
     pub mod bmp;
     #[cfg(feature = "dds")]
     pub mod dds;
-    #[cfg(feature = "ff")]
+    #[cfg(feature = "dxt")]
+    pub mod dxt;
+    #[cfg(feature = "farbfeld")]
     pub mod farbfeld;
     #[cfg(feature = "gif")]
     pub mod gif;
@@ -263,30 +234,132 @@ pub mod codecs {
     pub mod ico;
     #[cfg(feature = "jpeg")]
     pub mod jpeg;
-    #[cfg(feature = "exr")]
-    pub mod openexr;
     #[cfg(feature = "png")]
     pub mod png;
     #[cfg(feature = "pnm")]
     pub mod pnm;
-    #[cfg(feature = "qoi")]
-    pub mod qoi;
     #[cfg(feature = "tga")]
     pub mod tga;
     #[cfg(feature = "tiff")]
     pub mod tiff;
     #[cfg(feature = "webp")]
     pub mod webp;
-
-    #[cfg(feature = "dds")]
-    mod dxt;
 }
+
+#[cfg(feature = "avif-encoder")]
+#[deprecated = "Use codecs::avif instead"]
+pub mod avif {
+    //! Encoding of AVIF images.
+    pub use crate::codecs::avif::AvifEncoder;
+}
+#[cfg(feature = "bmp")]
+#[deprecated = "Use codecs::bmp instead"]
+pub mod bmp {
+    //! Decoding and Encoding of BMP Images
+    #[allow(deprecated)]
+    pub use crate::codecs::bmp::{BMPEncoder, BmpDecoder, BmpEncoder};
+}
+#[cfg(feature = "dds")]
+#[deprecated = "Use codecs::dds instead"]
+pub mod dds {
+    //! Decoding of DDS images
+    pub use crate::codecs::dds::DdsDecoder;
+}
+#[cfg(feature = "dxt")]
+#[deprecated = "Use codecs:: instead"]
+pub mod dxt {
+    //! Decoding of DXT (S3TC) compression
+    #[allow(deprecated)]
+    pub use crate::codecs::dxt::{
+        DXTEncoder, DXTReader, DXTVariant, DxtDecoder, DxtEncoder, DxtReader, DxtVariant,
+    };
+}
+#[cfg(feature = "farbfeld")]
+#[deprecated = "Use codecs::farbfeld instead"]
+pub mod farbfeld {
+    //! Decoding of farbfeld images
+    pub use crate::codecs::farbfeld::{FarbfeldDecoder, FarbfeldEncoder, FarbfeldReader};
+}
+#[cfg(feature = "gif")]
+#[deprecated = "Use codecs::gif instead"]
+pub mod gif {
+    //! Decoding of GIF Images
+    #[allow(deprecated)]
+    pub use crate::codecs::gif::{Encoder, GifDecoder, GifEncoder, GifReader, Repeat};
+}
+#[cfg(feature = "hdr")]
+#[deprecated = "Use codecs::hdr instead"]
+pub mod hdr {
+    //! Decoding of Radiance HDR Images
+    #[allow(deprecated)]
+    pub use crate::codecs::hdr::{
+        read_raw_file, rgbe8, to_rgbe8, HDRAdapter, HDREncoder, HDRImageDecoderIterator,
+        HDRMetadata, HdrAdapter, HdrDecoder, HdrEncoder, HdrImageDecoderIterator, HdrMetadata,
+        HdrReader, RGBE8Pixel, Rgbe8Pixel, SIGNATURE,
+    };
+}
+#[cfg(feature = "ico")]
+#[deprecated = "Use codecs::ico instead"]
+pub mod ico {
+    //! Decoding and Encoding of ICO files
+    #[allow(deprecated)]
+    pub use crate::codecs::ico::{ICOEncoder, IcoDecoder, IcoEncoder};
+}
+#[cfg(feature = "jpeg")]
+#[deprecated = "Use codecs::jpeg instead"]
+pub mod jpeg {
+    //! Decoding and Encoding of JPEG Images
+    #[allow(deprecated)]
+    pub use crate::codecs::jpeg::{
+        JPEGEncoder, JpegDecoder, JpegEncoder, PixelDensity, PixelDensityUnit,
+    };
+}
+#[cfg(feature = "png")]
+#[deprecated = "Use codecs::png instead"]
+pub mod png {
+    //! Decoding and Encoding of PNG Images
+    #[allow(deprecated)]
+    pub use crate::codecs::png::{
+        ApngDecoder, CompressionType, FilterType, PNGEncoder, PNGReader, PngDecoder, PngEncoder,
+        PngReader,
+    };
+}
+#[cfg(feature = "pnm")]
+#[deprecated = "Use codecs::pnm instead"]
+pub mod pnm {
+    //! Decoding and Encoding of netpbm image formats (pbm, pgm, ppm and pam)
+    #[allow(deprecated)]
+    pub use crate::codecs::pnm::{
+        ArbitraryHeader, ArbitraryTuplType, BitmapHeader, GraymapHeader, PNMEncoder, PNMHeader,
+        PNMSubtype, PixmapHeader, PnmDecoder, PnmEncoder, PnmHeader, PnmSubtype, SampleEncoding,
+    };
+}
+#[cfg(feature = "tga")]
+#[deprecated = "Use codecs::tga instead"]
+pub mod tga {
+    //! Decoding and Encoding of TGA Images
+    #[allow(deprecated)]
+    pub use crate::codecs::tga::{TgaDecoder, TgaEncoder};
+}
+#[cfg(feature = "tiff")]
+#[deprecated = "Use codecs::tiff instead"]
+pub mod tiff {
+    //! Decoding and Encoding of TIFF Images
+    #[allow(deprecated)]
+    pub use crate::codecs::tiff::{TiffDecoder, TiffEncoder, TiffReader};
+}
+#[cfg(feature = "webp")]
+#[deprecated = "Use codecs::webp instead"]
+pub mod webp {
+    //! Decoding of WebP Images
+    #[allow(deprecated)]
+    pub use crate::codecs::webp::{vp8, WebPDecoder};
+}
+
 
 mod animation;
 #[path = "buffer.rs"]
 mod buffer_;
-#[cfg(feature = "rayon")]
-mod buffer_par;
 mod color;
 mod dynimage;
 mod image;
@@ -304,10 +377,19 @@ mod utils;
 // Copyright (c) 2018 Guillaume Gomez
 macro_rules! insert_as_doc {
     { $content:expr } => {
-        #[allow(unused_doc_comments)]
         #[doc = $content] extern { }
     }
 }
 
 // Provides the README.md as doc, to ensure the example works!
 insert_as_doc!(include_str!("../README.md"));
+
+// Copies data from `src` to `dst`
+//
+// Panics if the length of `dst` is less than the length of `src`.
+#[inline]
+fn copy_memory(src: &[u8], mut dst: &mut [u8]) {
+    let len_src = src.len();
+    assert!(dst.len() >= len_src);
+    dst.write_all(src).unwrap();
+}

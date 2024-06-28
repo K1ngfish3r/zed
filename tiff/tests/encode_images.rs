@@ -1,7 +1,7 @@
 extern crate tiff;
 
 use tiff::decoder::{ifd, Decoder, DecodingResult};
-use tiff::encoder::{colortype, Ifd, Ifd8, SRational, TiffEncoder};
+use tiff::encoder::{colortype, SRational, TiffEncoder};
 use tiff::tags::Tag;
 use tiff::ColorType;
 
@@ -45,93 +45,6 @@ fn encode_decode() {
         } else {
             panic!("Wrong data type");
         }
-    }
-}
-
-#[test]
-fn encode_decode_big() {
-    let mut image_data = Vec::new();
-    for x in 0..100 {
-        for y in 0..100u8 {
-            let val = x + y;
-            image_data.push(val);
-            image_data.push(val);
-            image_data.push(val);
-        }
-    }
-    let mut file = Cursor::new(Vec::new());
-    {
-        let mut tiff = TiffEncoder::new_big(&mut file).unwrap();
-
-        let mut image = tiff.new_image::<colortype::RGB8>(100, 100).unwrap();
-        image
-            .encoder()
-            .write_tag(Tag::Artist, "Image-tiff")
-            .unwrap();
-        image.write_data(&image_data).unwrap();
-    }
-    {
-        file.seek(SeekFrom::Start(0)).unwrap();
-        let mut decoder = Decoder::new(&mut file).unwrap();
-        assert_eq!(decoder.colortype().unwrap(), ColorType::RGB(8));
-        assert_eq!(decoder.dimensions().unwrap(), (100, 100));
-        assert_eq!(
-            decoder.get_tag(Tag::Artist).unwrap(),
-            ifd::Value::Ascii("Image-tiff".into())
-        );
-        if let DecodingResult::U8(img_res) = decoder.read_image().unwrap() {
-            assert_eq!(image_data, img_res);
-        } else {
-            panic!("Wrong data type");
-        }
-    }
-}
-
-#[test]
-fn test_encode_ifd() {
-    let mut data = Cursor::new(Vec::new());
-
-    {
-        let mut tiff = TiffEncoder::new(&mut data).unwrap();
-        let mut image_encoder = tiff.new_image::<colortype::Gray8>(1, 1).unwrap();
-        image_encoder.write_strip(&[1]).unwrap();
-        let encoder = image_encoder.encoder();
-
-        // Use the "reusable" tags section as per the TIFF6 spec
-        encoder.write_tag(Tag::Unknown(65000), Ifd(42u32)).unwrap();
-        encoder
-            .write_tag(Tag::Unknown(65001), &[Ifd(100u32)][..])
-            .unwrap();
-        encoder
-            .write_tag(Tag::Unknown(65002), &[Ifd(1u32), Ifd(2u32), Ifd(3u32)][..])
-            .unwrap();
-
-        encoder.write_tag(Tag::Unknown(65010), Ifd8(43u64)).unwrap();
-        encoder
-            .write_tag(Tag::Unknown(65011), &[Ifd8(100u64)][..])
-            .unwrap();
-        encoder
-            .write_tag(
-                Tag::Unknown(65012),
-                &[Ifd8(1u64), Ifd8(2u64), Ifd8(3u64)][..],
-            )
-            .unwrap();
-    }
-
-    // Rewind the cursor for reading
-    data.set_position(0);
-    {
-        let mut decoder = Decoder::new(&mut data).unwrap();
-
-        assert_eq!(decoder.assert_tag_u32(65000), 42);
-        assert_eq!(decoder.assert_tag_u32_vec(65000), [42]);
-        assert_eq!(decoder.assert_tag_u32_vec(65001), [100]);
-        assert_eq!(decoder.assert_tag_u32_vec(65002), [1, 2, 3]);
-
-        assert_eq!(decoder.assert_tag_u64(65010), 43);
-        assert_eq!(decoder.assert_tag_u64_vec(65010), [43]);
-        assert_eq!(decoder.assert_tag_u64_vec(65011), [100]);
-        assert_eq!(decoder.assert_tag_u64_vec(65012), [1, 2, 3]);
     }
 }
 
@@ -264,20 +177,11 @@ fn test_gray_f64_roundtrip() {
     test_f64_roundtrip::<colortype::Gray64Float>("gradient-1c-64b-float.tiff", ColorType::Gray(64));
 }
 
-#[test]
-fn test_ycbcr_u8_roundtrip() {
-    test_u8_roundtrip::<colortype::YCbCr8>("tiled-jpeg-ycbcr.tif", ColorType::YCbCr(8));
-}
-
 trait AssertDecode {
     fn assert_tag_u32(&mut self, tag: u16) -> u32;
     fn assert_tag_u32_vec(&mut self, tag: u16) -> Vec<u32>;
     fn assert_tag_i32(&mut self, tag: u16) -> i32;
     fn assert_tag_i32_vec(&mut self, tag: u16) -> Vec<i32>;
-    fn assert_tag_u64(&mut self, tag: u16) -> u64;
-    fn assert_tag_u64_vec(&mut self, tag: u16) -> Vec<u64>;
-    fn assert_tag_i64(&mut self, tag: u16) -> i64;
-    fn assert_tag_i64_vec(&mut self, tag: u16) -> Vec<i64>;
 }
 
 impl<R: std::io::Read + std::io::Seek> AssertDecode for Decoder<R> {
@@ -299,24 +203,6 @@ impl<R: std::io::Read + std::io::Seek> AssertDecode for Decoder<R> {
             .into_i32_vec()
             .unwrap()
     }
-    fn assert_tag_u64(&mut self, tag: u16) -> u64 {
-        self.get_tag(Tag::Unknown(tag)).unwrap().into_u64().unwrap()
-    }
-    fn assert_tag_u64_vec(&mut self, tag: u16) -> Vec<u64> {
-        self.get_tag(Tag::Unknown(tag))
-            .unwrap()
-            .into_u64_vec()
-            .unwrap()
-    }
-    fn assert_tag_i64(&mut self, tag: u16) -> i64 {
-        self.get_tag(Tag::Unknown(tag)).unwrap().into_i64().unwrap()
-    }
-    fn assert_tag_i64_vec(&mut self, tag: u16) -> Vec<i64> {
-        self.get_tag(Tag::Unknown(tag))
-            .unwrap()
-            .into_i64_vec()
-            .unwrap()
-    }
 }
 
 #[test]
@@ -326,7 +212,6 @@ fn test_multiple_byte() {
     {
         let mut tiff = TiffEncoder::new(&mut data).unwrap();
         let mut image_encoder = tiff.new_image::<colortype::Gray8>(1, 1).unwrap();
-        image_encoder.write_strip(&[1]).unwrap();
         let encoder = image_encoder.encoder();
 
         encoder.write_tag(Tag::Unknown(65000), &[1_u8][..]).unwrap();
@@ -367,7 +252,6 @@ fn test_signed() {
     {
         let mut tiff = TiffEncoder::new(&mut data).unwrap();
         let mut image_encoder = tiff.new_image::<colortype::Gray8>(1, 1).unwrap();
-        image_encoder.write_strip(&[1]).unwrap();
         let encoder = image_encoder.encoder();
 
         //Use the "reusable" tags section as per the TIFF6 spec
@@ -405,20 +289,12 @@ fn test_signed() {
             .write_tag(Tag::Unknown(65022), &[-1_i32, 2][..])
             .unwrap();
 
-        encoder.write_tag(Tag::Unknown(65030), -1_i64).unwrap();
         encoder
-            .write_tag(Tag::Unknown(65031), &[-1_i64][..])
-            .unwrap();
-        encoder
-            .write_tag(Tag::Unknown(65032), &[-1_i64, 2][..])
-            .unwrap();
-
-        encoder
-            .write_tag(Tag::Unknown(65040), make_srational(-1))
+            .write_tag(Tag::Unknown(65030), make_srational(-1))
             .unwrap();
         encoder
             .write_tag(
-                Tag::Unknown(65041),
+                Tag::Unknown(65031),
                 &[make_srational(-1), make_srational(2)][..],
             )
             .unwrap();
@@ -445,12 +321,8 @@ fn test_signed() {
         assert_eq!(decoder.assert_tag_i32_vec(65021), [-1]);
         assert_eq!(decoder.assert_tag_i32_vec(65022), [-1, 2]);
 
-        assert_eq!(decoder.assert_tag_i64(65030), -1);
-        assert_eq!(decoder.assert_tag_i64_vec(65031), [-1]);
-        assert_eq!(decoder.assert_tag_i64_vec(65032), [-1, 2]);
-
-        assert_eq!(decoder.assert_tag_i32_vec(65040), [-1, 100]);
-        assert_eq!(decoder.assert_tag_i32_vec(65041), [-1_i32, 100, 2, 100]);
+        assert_eq!(decoder.assert_tag_i32_vec(65030), [-1, 100]);
+        assert_eq!(decoder.assert_tag_i32_vec(65031), [-1_i32, 100, 2, 100]);
     }
 }
 
@@ -520,7 +392,7 @@ fn test_rows_per_strip() {
 
         for i in 0..50 {
             let img2 = [i; 2 * 100];
-            match decoder.read_chunk(i as u32).unwrap() {
+            match decoder.read_strip().unwrap() {
                 DecodingResult::U8(data) => assert_eq!(&img2[..], &data[..]),
                 other => panic!("Incorrect strip type {:?}", other),
             }
