@@ -1,10 +1,13 @@
-use crate::{read_u16_from_be, read_u8};
-use error::{Error, Result, UnsupportedFeature};
-use huffman::{HuffmanTable, HuffmanTableClass};
-use marker::Marker;
-use marker::Marker::*;
+use alloc::borrow::ToOwned;
+use alloc::{format, vec};
+use alloc::vec::Vec;
+use core::ops::{self, Range};
 use std::io::{self, Read};
-use std::ops::Range;
+use crate::{read_u16_from_be, read_u8};
+use crate::error::{Error, Result, UnsupportedFeature};
+use crate::huffman::{HuffmanTable, HuffmanTableClass};
+use crate::marker::Marker;
+use crate::marker::Marker::*;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Dimensions {
@@ -18,12 +21,30 @@ pub enum EntropyCoding {
     Arithmetic,
 }
 
+/// Represents the coding process of an image.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CodingProcess {
+    /// Sequential Discrete Cosine Transform
     DctSequential,
+    /// Progressive Discrete Cosine Transform
     DctProgressive,
+    /// Lossless
     Lossless,
 }
+
+// Table H.1
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Predictor {
+    NoPrediction,
+    Ra,
+    Rb,
+    Rc,
+    RaRbRc1, // Ra + Rb - Rc
+    RaRbRc2, // Ra + ((Rb - Rc) >> 1)
+    RaRbRc3, // Rb + ((Ra - Rb) >> 1)
+    RaRb,    // (Ra + Rb)/2
+}
+
 
 #[derive(Clone)]
 pub struct FrameInfo {
@@ -46,8 +67,10 @@ pub struct ScanInfo {
     pub ac_table_indices: Vec<usize>,
 
     pub spectral_selection: Range<u8>,
+    pub predictor_selection: Predictor, // for lossless
     pub successive_approximation_high: u8,
     pub successive_approximation_low: u8,
+    pub point_transform: u8, // for lossless
 }
 
 #[derive(Clone, Debug)]
@@ -71,9 +94,13 @@ pub enum AppData {
     Jfif,
     Avi1,
     Icc(IccChunk),
+    Exif(Vec<u8>),
+    Xmp(Vec<u8>),
+    Psir(Vec<u8>),
 }
 
 // http://www.sno.phy.queensu.ca/~phil/exiftool/TagNames/JPEG.html#Adobe
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AdobeColorTransform {
     // RGB or CMYK
@@ -166,7 +193,7 @@ pub fn parse_sof<R: Read>(reader: &mut R, marker: Marker) -> Result<FrameInfo> {
             }
         },
         _ => {
-            if coding_process != CodingProcess::Lossless {
+            if coding_process != CodingProcess::Lossless || precision > 16 {
                 return Err(Error::Format(format!("invalid precision {} in frame header", precision)))
             }
         },
@@ -227,9 +254,9 @@ pub fn parse_sof<R: Read>(reader: &mut R, marker: Marker) -> Result<FrameInfo> {
         }
 
         components.push(Component {
-            identifier: identifier,
-            horizontal_sampling_factor: horizontal_sampling_factor,
-            vertical_sampling_factor: vertical_sampling_factor,
+            identifier,
+            horizontal_sampling_factor,
+            vertical_sampling_factor,
             quantization_table_index: quantization_table_index as usize,
             dct_scale: 8,
             size: Dimensions {width: 0, height: 0},
@@ -240,15 +267,15 @@ pub fn parse_sof<R: Read>(reader: &mut R, marker: Marker) -> Result<FrameInfo> {
     let mcu_size = update_component_sizes(Dimensions { width, height }, &mut components)?;
 
     Ok(FrameInfo {
-        is_baseline: is_baseline,
-        is_differential: is_differential,
-        coding_process: coding_process,
-        entropy_coding: entropy_coding,
-        precision: precision,
+        is_baseline,
+        is_differential,
+        coding_process,
+        entropy_coding,
+        precision,
         image_size: Dimensions { width, height },
         output_size: Dimensions { width, height },
         mcu_size,
-        components: components,
+        components,
     })
 }
 
@@ -358,20 +385,28 @@ pub fn parse_sos<R: Read>(reader: &mut R, frame: &FrameInfo) -> Result<ScanInfo>
 
     let blocks_per_mcu = component_indices.iter().map(|&i| {
         frame.components[i].horizontal_sampling_factor as u32 * frame.components[i].vertical_sampling_factor as u32
-    }).fold(0, ::std::ops::Add::add);
+    }).fold(0, ops::Add::add);
 
     if component_count > 1 && blocks_per_mcu > 10 {
         return Err(Error::Format("scan with more than one component and more than 10 blocks per MCU".to_owned()));
     }
 
+    // Also utilized as 'Predictor' in lossless coding, as MEAN in JPEG-LS etc.
     let spectral_selection_start = read_u8(reader)?;
-    let spectral_selection_end = read_u8(reader)?;
+    // Also utilized as ILV parameter in JPEG-LS.
+    let mut spectral_selection_end = read_u8(reader)?;
 
     let byte = read_u8(reader)?;
     let successive_approximation_high = byte >> 4;
     let successive_approximation_low = byte & 0x0f;
 
+    // The Differential Pulse-Mode prediction used (similar to png). Only utilized in Lossless
+    // coding. Don't confuse with the JPEG-LS parameter coded using the same scan info portion.
+    let predictor_selection;
+    let point_transform = successive_approximation_low;
+
     if frame.coding_process == CodingProcess::DctProgressive {
+        predictor_selection = Predictor::NoPrediction;
         if spectral_selection_end > 63 || spectral_selection_start > spectral_selection_end ||
                 (spectral_selection_start == 0 && spectral_selection_end != 0) {
             return Err(Error::Format(format!("invalid spectral selection parameters: ss={}, se={}", spectral_selection_start, spectral_selection_end)));
@@ -391,7 +426,32 @@ pub fn parse_sos<R: Read>(reader: &mut R, frame: &FrameInfo) -> Result<ScanInfo>
             return Err(Error::Format("successive approximation scan with more than one bit of improvement".to_owned()));
         }
     }
+    else if frame.coding_process == CodingProcess::Lossless {
+        if spectral_selection_end != 0 {
+            return Err(Error::Format("spectral selection end shall be zero in lossless scan".to_owned()));
+        }
+        if successive_approximation_high != 0 {
+            return Err(Error::Format("successive approximation high shall be zero in lossless scan".to_owned()));
+        }
+        predictor_selection = match spectral_selection_start {
+            0 => Predictor::NoPrediction,
+            1 => Predictor::Ra,
+            2 => Predictor::Rb,
+            3 => Predictor::Rc,
+            4 => Predictor::RaRbRc1,
+            5 => Predictor::RaRbRc2,
+            6 => Predictor::RaRbRc3,
+            7 => Predictor::RaRb,
+            _ => {
+                return Err(Error::Format(format!("invalid predictor selection value: {}", spectral_selection_start)));
+            },
+        };
+    }
     else {
+        predictor_selection = Predictor::NoPrediction;
+        if spectral_selection_end == 0 {
+            spectral_selection_end = 63;
+        }
         if spectral_selection_start != 0 || spectral_selection_end != 63 {
             return Err(Error::Format("spectral selection is not allowed in non-progressive scan".to_owned()));
         }
@@ -401,15 +461,17 @@ pub fn parse_sos<R: Read>(reader: &mut R, frame: &FrameInfo) -> Result<ScanInfo>
     }
 
     Ok(ScanInfo {
-        component_indices: component_indices,
-        dc_table_indices: dc_table_indices,
-        ac_table_indices: ac_table_indices,
+        component_indices,
+        dc_table_indices,
+        ac_table_indices,
         spectral_selection: Range {
             start: spectral_selection_start,
             end: spectral_selection_end + 1,
         },
-        successive_approximation_high: successive_approximation_high,
-        successive_approximation_low: successive_approximation_low,
+        predictor_selection,
+        successive_approximation_high,
+        successive_approximation_low,
+        point_transform,
     })
 }
 
@@ -464,6 +526,7 @@ pub fn parse_dqt<R: Read>(reader: &mut R) -> Result<[Option<[u16; 64]>; 4]> {
 }
 
 // Section B.2.4.2
+#[allow(clippy::type_complexity)]
 pub fn parse_dht<R: Read>(reader: &mut R, is_baseline: Option<bool>) -> Result<(Vec<Option<HuffmanTable>>, Vec<Option<HuffmanTable>>)> {
     let mut length = read_length(reader, DHT)?;
     let mut dc_tables = vec![None, None, None, None];
@@ -488,7 +551,7 @@ pub fn parse_dht<R: Read>(reader: &mut R, is_baseline: Option<bool>) -> Result<(
         let mut counts = [0u8; 16];
         reader.read_exact(&mut counts)?;
 
-        let size = counts.iter().map(|&val| val as usize).fold(0, ::std::ops::Add::add);
+        let size = counts.iter().map(|&val| val as usize).fold(0, ops::Add::add);
 
         if size == 0 {
             return Err(Error::Format("encountered table with zero length in DHT".to_owned()));
@@ -554,12 +617,28 @@ pub fn parse_app<R: Read>(reader: &mut R, marker: Marker) -> Result<Option<AppDa
                 bytes_read = buffer.len();
 
                 // http://www.w3.org/Graphics/JPEG/jfif3.pdf
-                if &buffer[0 .. 5] == &[b'J', b'F', b'I', b'F', b'\0'] {
+                if buffer[0..5] == *b"JFIF\0" {
                     result = Some(AppData::Jfif);
                 // https://sno.phy.queensu.ca/~phil/exiftool/TagNames/JPEG.html#AVI1
-                } else if &buffer[0 .. 5] == &[b'A', b'V', b'I', b'1', b'\0'] {
+                } else if buffer[0..5] == *b"AVI1\0" {
                     result = Some(AppData::Avi1);
                 }
+            }
+        }
+        APP(1) => {
+            let mut buffer = vec![0u8; length];
+            reader.read_exact(&mut buffer)?;
+            bytes_read = buffer.len();
+
+            // https://web.archive.org/web/20190624045241if_/http://www.cipa.jp:80/std/documents/e/DC-008-Translation-2019-E.pdf
+            // 4.5.4 Basic Structure of JPEG Compressed Data
+            if length >= 6 && buffer[0..6] == *b"Exif\x00\x00" {
+                result = Some(AppData::Exif(buffer[6..].to_vec()));
+            }
+            // XMP packet
+            // https://github.com/adobe/XMP-Toolkit-SDK/blob/main/docs/XMPSpecificationPart3.pdf
+            else if length >= 29 && buffer[0..29] == *b"http://ns.adobe.com/xap/1.0/\0" {
+                result = Some(AppData::Xmp(buffer[29..].to_vec()));
             }
         }
         APP(2) => {
@@ -570,7 +649,7 @@ pub fn parse_app<R: Read>(reader: &mut R, marker: Marker) -> Result<Option<AppDa
 
                 // http://www.color.org/ICC_Minor_Revision_for_Web.pdf
                 // B.4 Embedding ICC profiles in JFIF files
-                if &buffer[0..12] == b"ICC_PROFILE\0" {
+                if buffer[0..12] == *b"ICC_PROFILE\0" {
                     let mut data = vec![0; length - bytes_read];
                     reader.read_exact(&mut data)?;
                     bytes_read += data.len();
@@ -582,6 +661,22 @@ pub fn parse_app<R: Read>(reader: &mut R, marker: Marker) -> Result<Option<AppDa
                 }
             }
         }
+        APP(13) => {
+            if length >= 14 {
+                let mut buffer = [0u8; 14];
+                reader.read_exact(&mut buffer)?;
+                bytes_read = buffer.len();
+
+                // PSIR (Photoshop)
+                // https://github.com/adobe/XMP-Toolkit-SDK/blob/main/docs/XMPSpecificationPart3.pdf
+                if buffer[0..14] == *b"Photoshop 3.0\0" {
+                    let mut data = vec![0; length - bytes_read];
+                    reader.read_exact(&mut data)?;
+                    bytes_read += data.len();
+                    result = Some(AppData::Psir(data));
+                }
+            }
+        }
         APP(14) => {
             if length >= 12 {
                 let mut buffer = [0u8; 12];
@@ -589,7 +684,7 @@ pub fn parse_app<R: Read>(reader: &mut R, marker: Marker) -> Result<Option<AppDa
                 bytes_read = buffer.len();
 
                 // http://www.sno.phy.queensu.ca/~phil/exiftool/TagNames/JPEG.html#Adobe
-                if &buffer[0 .. 6] == &[b'A', b'd', b'o', b'b', b'e', b'\0'] {
+                if buffer[0 .. 6] == *b"Adobe\0" {
                     let color_transform = match buffer[11] {
                         0 => AdobeColorTransform::Unknown,
                         1 => AdobeColorTransform::YCbCr,

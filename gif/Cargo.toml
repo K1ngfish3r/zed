@@ -10,15 +10,15 @@
 # See Cargo.toml.orig for the original contents.
 
 [package]
-edition = "2018"
+edition = "2021"
 name = "gif"
-version = "0.11.4"
-authors = ["nwin <nwin@users.noreply.github.com>"]
-exclude = [
-    "tests/crashtest/*",
-    "tests/samples/*",
-    "benches/*.gif",
-    "gif-afl/*",
+version = "0.13.1"
+authors = ["The image-rs Developers"]
+include = [
+    "src/**",
+    "LICENSE-*",
+    "README.md",
+    "benches/*.rs",
 ]
 description = "GIF de- and encoder"
 homepage = "https://github.com/image-rs/image-gif"
@@ -27,25 +27,8 @@ readme = "README.md"
 license = "MIT/Apache-2.0"
 repository = "https://github.com/image-rs/image-gif"
 
-[[test]]
-name = "check_testimages"
-required-features = ["std"]
-
-[[test]]
-name = "crashtest"
-required-features = ["std"]
-
-[[test]]
-name = "decode"
-required-features = ["std"]
-
-[[test]]
-name = "stall"
-required-features = ["std"]
-
-[[test]]
-name = "roundtrip"
-required-features = ["std"]
+[lib]
+bench = false
 
 [[bench]]
 name = "decode"
@@ -55,27 +38,36 @@ required-features = ["std"]
 [[bench]]
 name = "rgb_frame"
 harness = false
-required-features = ["std"]
+required-features = [
+    "std",
+    "color_quant",
+]
 
 [dependencies.color_quant]
-version = "1.0"
+version = "1.1"
+optional = true
 
 [dependencies.weezl]
-version = "0.1.5"
+version = "0.1.8"
 
 [dev-dependencies.criterion]
-version = "0.3.1"
+version = "0.5.1"
 
 [dev-dependencies.glob]
 version = "0.3"
 
 [dev-dependencies.png]
-version = "0.17.2"
+version = "0.17.10"
+
+[dev-dependencies.rayon]
+version = "1.8.0"
 
 [features]
+color_quant = ["dep:color_quant"]
 default = [
     "raii_no_panic",
     "std",
+    "color_quant",
 ]
 raii_no_panic = []
 std = []

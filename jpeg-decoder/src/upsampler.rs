@@ -1,5 +1,8 @@
-use error::{Error, Result, UnsupportedFeature};
-use parser::Component;
+use alloc::boxed::Box;
+use alloc::vec;
+use alloc::vec::Vec;
+use crate::error::{Error, Result, UnsupportedFeature};
+use crate::parser::Component;
 
 pub struct Upsampler {
     components: Vec<UpsamplerComponent>,
@@ -26,7 +29,7 @@ impl Upsampler {
                                              output_width,
                                              output_height)?;
             upsampler_components.push(UpsamplerComponent {
-                upsampler: upsampler,
+                upsampler,
                 width: component.size.width as usize,
                 height: component.size.height as usize,
                 row_stride: component.block_size.width as usize * component.dct_scale,
@@ -41,9 +44,9 @@ impl Upsampler {
         })
     }
 
-    pub fn upsample_and_interleave_row(&self, component_data: &[Vec<u8>], row: usize, output_width: usize, output: &mut [u8]) {
+    pub fn upsample_and_interleave_row(&self, component_data: &[Vec<u8>], row: usize, output_width: usize, output: &mut [u8], color_convert: fn(&[Vec<u8>], &mut [u8])) {
         let component_count = component_data.len();
-        let mut line_buffer = vec![0u8; self.line_buffer_size];
+        let mut line_buffers = vec![vec![0u8; self.line_buffer_size]; component_count];
 
         debug_assert_eq!(component_count, self.components.len());
 
@@ -54,11 +57,9 @@ impl Upsampler {
                                              component.row_stride,
                                              row,
                                              output_width,
-                                             &mut line_buffer);
-            for x in 0 .. output_width {
-                output[x * component_count + i] = line_buffer[x];
-            }
+                                             &mut line_buffers[i]);
         }
+        color_convert(&line_buffers, output);
     }
 }
 
@@ -83,29 +84,27 @@ fn choose_upsampler(sampling_factors: (u8, u8),
 
     if h1 && v1 {
         Ok(Box::new(UpsamplerH1V1))
-    }
-    else if h2 && v1 {
+    } else if h2 && v1 {
         Ok(Box::new(UpsamplerH2V1))
-    }
-    else if h1 && v2 {
+    } else if h1 && v2 {
         Ok(Box::new(UpsamplerH1V2))
-    }
-    else if h2 && v2 {
+    } else if h2 && v2 {
         Ok(Box::new(UpsamplerH2V2))
-    }
-    else {
-        if max_sampling_factors.0 % sampling_factors.0 != 0 || max_sampling_factors.1 % sampling_factors.1 != 0 {
-            Err(Error::Unsupported(UnsupportedFeature::NonIntegerSubsamplingRatio))
-        }
-        else {
-            Ok(Box::new(UpsamplerGeneric {
-                horizontal_scaling_factor: max_sampling_factors.0 / sampling_factors.0,
-                vertical_scaling_factor: max_sampling_factors.1 / sampling_factors.1
-            }))
-        }
+    } else if max_sampling_factors.0 % sampling_factors.0 != 0
+        || max_sampling_factors.1 % sampling_factors.1 != 0
+    {
+        Err(Error::Unsupported(
+            UnsupportedFeature::NonIntegerSubsamplingRatio,
+        ))
+    } else {
+        Ok(Box::new(UpsamplerGeneric {
+            horizontal_scaling_factor: max_sampling_factors.0 / sampling_factors.0,
+            vertical_scaling_factor: max_sampling_factors.1 / sampling_factors.1,
+        }))
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 trait Upsample {
     fn upsample_row(&self,
                     input: &[u8],
@@ -180,7 +179,10 @@ impl Upsample for UpsamplerH1V2 {
         let input_near = &input[row_near as usize * row_stride ..];
         let input_far = &input[row_far as usize * row_stride ..];
 
-        for i in 0 .. output_width {
+        let output = &mut output[..output_width];
+        let input_near = &input_near[..output_width];
+        let input_far = &input_far[..output_width];
+        for i in 0..output_width {
             output[i] = ((3 * input_near[i] as u32 + input_far[i] as u32 + 2) >> 2) as u8;
         }
     }

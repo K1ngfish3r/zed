@@ -1,24 +1,13 @@
+use crate::codecs::hdr::{rgbe8, Rgbe8Pixel, SIGNATURE};
 use crate::color::Rgb;
 use crate::error::ImageResult;
-use crate::hdr::{rgbe8, Rgbe8Pixel, SIGNATURE};
-use std::io::{Result, Write};
 use std::cmp::Ordering;
+use std::io::{Result, Write};
 
 /// Radiance HDR encoder
 pub struct HdrEncoder<W: Write> {
     w: W,
 }
-
-/// HDR Encoder
-///
-/// An alias of [`HdrEncoder`].
-///
-/// TODO: remove
-///
-/// [`HdrEncoder`]: struct.HdrEncoder.html
-#[allow(dead_code)]
-#[deprecated(note = "Use `HdrEncoder` instead")]
-pub type HDREncoder<R> = HdrEncoder<R>;
 
 impl<W: Write> HdrEncoder<W> {
     /// Creates encoder
@@ -37,7 +26,7 @@ impl<W: Write> HdrEncoder<W> {
         w.write_all(b"FORMAT=32-bit_rle_rgbe\n\n")?;
         w.write_all(format!("-Y {} +X {}\n", height, width).as_bytes())?;
 
-        if width < 8 || width > 32_768 {
+        if !(8..=32_768).contains(&width) {
             for &pix in data {
                 write_rgbe8(w, to_rgbe8(pix))?;
             }
@@ -51,7 +40,8 @@ impl<W: Write> HdrEncoder<W> {
             let mut bufe = vec![0; width];
             let mut rle_buf = vec![0; width];
             for scanline in data.chunks(width) {
-                for ((((r, g), b), e), &pix) in bufr.iter_mut()
+                for ((((r, g), b), e), &pix) in bufr
+                    .iter_mut()
                     .zip(bufg.iter_mut())
                     .zip(bufb.iter_mut())
                     .zip(bufe.iter_mut())
@@ -161,7 +151,8 @@ impl<'a> Iterator for NorunCombineIterator<'a> {
                                 Ordering::Equal => return Some(Norun(idx, clen)),
                                 Ordering::Greater => {
                                     // combined norun exceeds maximum length. store extra part of norun
-                                    self.prev = Some(Norun(idx + NORUN_MAX_LEN, clen - NORUN_MAX_LEN));
+                                    self.prev =
+                                        Some(Norun(idx + NORUN_MAX_LEN, clen - NORUN_MAX_LEN));
                                     // then return maximal norun
                                     return Some(Norun(idx, NORUN_MAX_LEN));
                                 }
@@ -235,8 +226,8 @@ fn write_rgbe8<W: Write>(w: &mut W, v: Rgbe8Pixel) -> Result<()> {
     w.write_all(&[v.c[0], v.c[1], v.c[2], v.e])
 }
 
-/// Converts ```Rgb<f32>``` into ```RGBE8Pixel```
-pub fn to_rgbe8(pix: Rgb<f32>) -> Rgbe8Pixel {
+/// Converts ```Rgb<f32>``` into ```Rgbe8Pixel```
+pub(crate) fn to_rgbe8(pix: Rgb<f32>) -> Rgbe8Pixel {
     let pix = pix.0;
     let mx = f32::max(pix[0], f32::max(pix[1], pix[2]));
     if mx <= 0.0 {
@@ -258,7 +249,7 @@ pub fn to_rgbe8(pix: Rgb<f32>) -> Rgbe8Pixel {
 
 #[test]
 fn to_rgbe8_test() {
-    use crate::hdr::rgbe8;
+    use crate::codecs::hdr::rgbe8;
     let test_cases = vec![rgbe8(0, 0, 0, 0), rgbe8(1, 1, 128, 128)];
     for &pix in &test_cases {
         assert_eq!(pix, to_rgbe8(pix.to_hdr()));
@@ -285,14 +276,14 @@ fn to_rgbe8_test() {
     }
     fn relative_dist(a: Rgb<f32>, b: Rgb<f32>) -> f32 {
         // maximal difference divided by maximal value
-        let max_diff = a.0
-            .iter()
-            .zip(b.0.iter())
-            .fold(0.0, |diff, (&a, &b)| f32::max(diff, (a - b).abs()));
-        let max_val = a.0
-            .iter()
-            .chain(b.0.iter())
-            .fold(0.0, |maxv, &a| f32::max(maxv, a));
+        let max_diff =
+            a.0.iter()
+                .zip(b.0.iter())
+                .fold(0.0, |diff, (&a, &b)| f32::max(diff, (a - b).abs()));
+        let max_val =
+            a.0.iter()
+                .chain(b.0.iter())
+                .fold(0.0, |maxv, &a| f32::max(maxv, a));
         if max_val == 0.0 {
             0.0
         } else {
@@ -383,26 +374,26 @@ fn noruncombine_test() {
         v
     }
 
-    let v = vec![];
+    let v = [];
     let mut rsi = NorunCombineIterator::new(&v[..]);
     assert_eq!(rsi.next(), None);
 
-    let v = vec![1];
+    let v = [1];
     let mut rsi = NorunCombineIterator::new(&v[..]);
     assert_eq!(rsi.next(), Some(Norun(0, 1)));
     assert_eq!(rsi.next(), None);
 
-    let v = vec![2, 2];
+    let v = [2, 2];
     let mut rsi = NorunCombineIterator::new(&v[..]);
     assert_eq!(rsi.next(), Some(Norun(0, 2)));
     assert_eq!(rsi.next(), None);
 
-    let v = vec![3, 3, 3];
+    let v = [3, 3, 3];
     let mut rsi = NorunCombineIterator::new(&v[..]);
     assert_eq!(rsi.next(), Some(Run(3, 3)));
     assert_eq!(rsi.next(), None);
 
-    let v = vec![4, 4, 3, 3, 3];
+    let v = [4, 4, 3, 3, 3];
     let mut rsi = NorunCombineIterator::new(&v[..]);
     assert_eq!(rsi.next(), Some(Norun(0, 2)));
     assert_eq!(rsi.next(), Some(Run(3, 3)));
@@ -430,7 +421,7 @@ fn noruncombine_test() {
     assert_eq!(rsi.next(), Some(Norun(129, 7)));
     assert_eq!(rsi.next(), None);
 
-    let v: Vec<_> = ::std::iter::repeat(())
+    let v: Vec<_> = std::iter::repeat(())
         .flat_map(|_| (0..2))
         .take(257)
         .collect();
