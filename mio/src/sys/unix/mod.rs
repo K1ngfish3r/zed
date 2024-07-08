@@ -4,8 +4,9 @@
 #[allow(unused_macros)]
 macro_rules! syscall {
     ($fn: ident ( $($arg: expr),* $(,)* ) ) => {{
+        #[allow(unused_unsafe)]
         let res = unsafe { libc::$fn($($arg, )*) };
-        if res == -1 {
+        if res < 0 {
             Err(std::io::Error::last_os_error())
         } else {
             Ok(res)
@@ -29,19 +30,18 @@ cfg_os_poll! {
 
         pub(crate) mod tcp;
         pub(crate) mod udp;
+        #[cfg(not(target_os = "hermit"))]
         pub(crate) mod uds;
-        pub use self::uds::SocketAddr;
     }
 
     cfg_io_source! {
         // Both `kqueue` and `epoll` don't need to hold any user space state.
-        #[cfg(not(any(mio_unsupported_force_poll_poll, target_os = "solaris", target_os = "vita")))]
+        #[cfg(not(any(mio_unsupported_force_poll_poll, target_os = "espidf", target_os = "haiku", target_os = "hermit", target_os = "nto", target_os = "solaris", target_os = "vita")))]
         mod stateless_io_source {
             use std::io;
-            use std::os::unix::io::RawFd;
-            use crate::Registry;
-            use crate::Token;
-            use crate::Interest;
+            use std::os::fd::RawFd;
+
+            use crate::{Registry, Token, Interest};
 
             pub(crate) struct IoSourceState;
 
@@ -88,22 +88,24 @@ cfg_os_poll! {
             }
         }
 
-        #[cfg(not(any(mio_unsupported_force_poll_poll, target_os = "solaris",target_os = "vita")))]
+        #[cfg(not(any(mio_unsupported_force_poll_poll, target_os = "espidf", target_os = "haiku", target_os = "hermit", target_os = "nto", target_os = "solaris", target_os = "vita")))]
         pub(crate) use self::stateless_io_source::IoSourceState;
 
-        #[cfg(any(mio_unsupported_force_poll_poll, target_os = "solaris", target_os = "vita"))]
+        #[cfg(any(mio_unsupported_force_poll_poll, target_os = "espidf", target_os = "haiku", target_os = "hermit", target_os = "nto", target_os = "solaris", target_os = "vita"))]
         pub(crate) use self::selector::IoSourceState;
     }
 
     #[cfg(any(
         // For the public `pipe` module, must match `cfg_os_ext` macro.
-        feature = "os-ext",
+        all(feature = "os-ext", not(target_os = "hermit")),
         // For the `Waker` type based on a pipe.
         mio_unsupported_force_waker_pipe,
         target_os = "aix",
         target_os = "dragonfly",
+        target_os = "haiku",
         target_os = "illumos",
         target_os = "netbsd",
+        target_os = "nto",
         target_os = "openbsd",
         target_os = "redox",
         target_os = "solaris",
@@ -113,11 +115,6 @@ cfg_os_poll! {
 }
 
 cfg_not_os_poll! {
-    cfg_net! {
-        mod uds;
-        pub use self::uds::SocketAddr;
-    }
-
     cfg_any_os_ext! {
         mod sourcefd;
         #[cfg(feature = "os-ext")]
