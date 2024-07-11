@@ -7,7 +7,10 @@
 //!
 //! ```rust,no_run
 //! use ashpd::{
-//!     desktop::screencast::{CursorMode, PersistMode, Screencast, SourceType},
+//!     desktop::{
+//!         screencast::{CursorMode, Screencast, SourceType},
+//!         PersistMode,
+//!     },
 //!     WindowIdentifier,
 //! };
 //!
@@ -46,8 +49,11 @@ use serde::Deserialize;
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use zbus::zvariant::{self, DeserializeDict, SerializeDict, Type, Value};
 
-use super::{HandleToken, Request, Session};
-use crate::{proxy::Proxy, Error, WindowIdentifier};
+use super::{
+    remote_desktop::RemoteDesktop, session::SessionPortal, HandleToken, PersistMode, Request,
+    Session,
+};
+use crate::{desktop::session::CreateSessionResponse, proxy::Proxy, Error, WindowIdentifier};
 
 #[bitflags]
 #[derive(Serialize_repr, Deserialize_repr, PartialEq, Eq, Copy, Clone, Debug, Type)]
@@ -82,25 +88,6 @@ pub enum CursorMode {
     /// The cursor is not part of the screen cast stream, but sent as PipeWire
     /// stream metadata.
     Metadata,
-}
-
-#[cfg_attr(feature = "glib", derive(glib::Enum))]
-#[cfg_attr(feature = "glib", enum_type(name = "AshpdPersistMode"))]
-#[derive(Default, Serialize_repr, PartialEq, Eq, Debug, Copy, Clone, Type)]
-#[doc(alias = "XdpPersistMode")]
-#[repr(u32)]
-/// Persistence mode for a screencast session.
-pub enum PersistMode {
-    #[doc(alias = "XDP_PERSIST_MODE_NONE")]
-    #[default]
-    /// Do not persist.
-    DoNot = 0,
-    #[doc(alias = "XDP_PERSIST_MODE_TRANSIENT")]
-    /// Persist while the application is running.
-    Application = 1,
-    #[doc(alias = "XDP_PERSIST_MODE_PERSISTENT")]
-    /// Persist until explicitly revoked.
-    ExplicitlyRevoked = 2,
 }
 
 #[derive(SerializeDict, Type, Debug, Default)]
@@ -170,16 +157,6 @@ impl SelectSourcesOptions {
 struct StartCastOptions {
     /// A string that will be used as the last element of the handle.
     handle_token: HandleToken,
-}
-
-#[derive(DeserializeDict, Type, Debug)]
-/// A response to a [`Screencast::create_session`] request.
-#[zvariant(signature = "dict")]
-struct CreateSession {
-    // TODO: investigate why this doesn't return an ObjectPath
-    // replace with an ObjectPath once https://github.com/flatpak/xdg-desktop-portal/pull/609's merged
-    /// A string that will be used as the last element of the session handle.
-    session_handle: String,
 }
 
 #[derive(DeserializeDict, Type)]
@@ -300,15 +277,15 @@ impl<'a> Screencast<'a> {
     /// See also [`CreateSession`](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.ScreenCast.html#org-freedesktop-portal-screencast-createsession).
     #[doc(alias = "CreateSession")]
     #[doc(alias = "xdp_portal_create_screencast_session")]
-    pub async fn create_session(&self) -> Result<Session<'a>, Error> {
+    pub async fn create_session(&self) -> Result<Session<'a, Self>, Error> {
         let options = CreateSessionOptions::default();
         let (request, proxy) = futures_util::try_join!(
             self.0
-                .request::<CreateSession>(&options.handle_token, "CreateSession", &options)
+                .request::<CreateSessionResponse>(&options.handle_token, "CreateSession", &options)
                 .into_future(),
             Session::from_unique_name(&options.session_handle_token).into_future(),
         )?;
-        assert_eq!(proxy.path().as_str(), &request.response()?.session_handle);
+        assert_eq!(proxy.path(), &request.response()?.session_handle.as_ref());
         Ok(proxy)
     }
 
@@ -328,7 +305,10 @@ impl<'a> Screencast<'a> {
     ///
     /// See also [`OpenPipeWireRemote`](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.ScreenCast.html#org-freedesktop-portal-screencast-openpipewireremote).
     #[doc(alias = "OpenPipeWireRemote")]
-    pub async fn open_pipe_wire_remote(&self, session: &Session<'_>) -> Result<OwnedFd, Error> {
+    pub async fn open_pipe_wire_remote(
+        &self,
+        session: &Session<'_, impl HasScreencastSession>,
+    ) -> Result<OwnedFd, Error> {
         // `options` parameter doesn't seems to be used yet
         // see https://github.com/flatpak/xdg-desktop-portal/blob/master/src/screen-cast.c#L812
         let options: HashMap<&str, Value<'_>> = HashMap::new();
@@ -361,7 +341,7 @@ impl<'a> Screencast<'a> {
     #[doc(alias = "SelectSources")]
     pub async fn select_sources(
         &self,
-        session: &Session<'_>,
+        session: &Session<'_, impl HasScreencastSession>,
         cursor_mode: CursorMode,
         types: BitFlags<SourceType>,
         multiple: bool,
@@ -402,7 +382,7 @@ impl<'a> Screencast<'a> {
     #[doc(alias = "Start")]
     pub async fn start(
         &self,
-        session: &Session<'_>,
+        session: &Session<'_, impl HasScreencastSession>,
         identifier: &WindowIdentifier,
     ) -> Result<Request<Streams>, Error> {
         let options = StartCastOptions::default();
@@ -443,3 +423,10 @@ impl<'a> std::ops::Deref for Screencast<'a> {
         &self.0
     }
 }
+
+impl SessionPortal for Screencast<'_> {}
+
+/// Defines which portals session can be used in a screen-cast.
+pub trait HasScreencastSession: SessionPortal {}
+impl HasScreencastSession for Screencast<'_> {}
+impl HasScreencastSession for RemoteDesktop<'_> {}

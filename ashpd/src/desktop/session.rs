@@ -1,8 +1,8 @@
-use std::{collections::HashMap, fmt::Debug};
+use std::{collections::HashMap, fmt::Debug, marker::PhantomData};
 
 use futures_util::Stream;
-use serde::{Serialize, Serializer};
-use zbus::zvariant::{ObjectPath, OwnedValue, Signature, Type};
+use serde::{Deserialize, Serialize, Serializer};
+use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Type};
 
 use crate::{desktop::HandleToken, proxy::Proxy, Error};
 
@@ -20,25 +20,32 @@ pub type SessionDetails = HashMap<String, OwnedValue>;
 /// directly call [`Session::close`] depends on the interface.
 ///
 /// Wrapper of the DBus interface: [`org.freedesktop.portal.Session`](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Session.html).
+#[derive(Type)]
 #[doc(alias = "org.freedesktop.portal.Session")]
-pub struct Session<'a>(Proxy<'a>);
+#[zvariant(signature = "o")]
+pub struct Session<'a, T>(Proxy<'a>, PhantomData<T>)
+where
+    T: SessionPortal;
 
-impl<'a> Session<'a> {
+impl<'a, T> Session<'a, T>
+where
+    T: SessionPortal,
+{
     /// Create a new instance of [`Session`].
     ///
     /// **Note** A [`Session`] is not supposed to be created manually.
-    pub(crate) async fn new<P>(path: P) -> Result<Session<'a>, Error>
+    pub(crate) async fn new<P>(path: P) -> Result<Session<'a, T>, Error>
     where
         P: TryInto<ObjectPath<'a>>,
         P::Error: Into<zbus::Error>,
     {
         let proxy = Proxy::new_desktop_with_path("org.freedesktop.portal.Session", path).await?;
-        Ok(Self(proxy))
+        Ok(Self(proxy, PhantomData))
     }
 
     pub(crate) async fn from_unique_name(
         handle_token: &HandleToken,
-    ) -> Result<Session<'a>, crate::Error> {
+    ) -> Result<Session<'a, T>, crate::Error> {
         let path =
             Proxy::unique_name("/org/freedesktop/portal/desktop/session", handle_token).await?;
         #[cfg(feature = "tracing")]
@@ -72,7 +79,10 @@ impl<'a> Session<'a> {
     }
 }
 
-impl<'a> Serialize for Session<'a> {
+impl<'a, T> Serialize for Session<'a, T>
+where
+    T: SessionPortal,
+{
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -81,16 +91,61 @@ impl<'a> Serialize for Session<'a> {
     }
 }
 
-impl<'a> Type for Session<'a> {
-    fn signature() -> Signature<'static> {
-        ObjectPath::signature()
-    }
-}
-
-impl<'a> Debug for Session<'a> {
+impl<'a, T> Debug for Session<'a, T>
+where
+    T: SessionPortal,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("Session")
             .field(&self.path().as_str())
             .finish()
+    }
+}
+
+/// Portals that have a long-lived interaction
+pub trait SessionPortal {}
+
+/// A response to a `create_session` request.
+#[derive(Type, Debug)]
+#[zvariant(signature = "dict")]
+pub(crate) struct CreateSessionResponse {
+    pub(crate) session_handle: OwnedObjectPath,
+}
+
+// Context: Various portal were expected to actually return an OwnedObjectPath
+// but unfortunately this wasn't the case when the portals were implemented in
+// xdp. Fixing that would be an API break as well...
+// See <https://github.com/flatpak/xdg-desktop-portal/pull/609>
+// The Location, ScreenCast, Remote Desktop, Global Shortcuts and Inhibit
+// portals `CreateSession` calls are all affected.
+//
+// So in order to be future proof, we try to deserialize the `session_handle`
+// key as a string and fallback to an object path in case the situation gets
+// resolved in the future.
+impl<'de> Deserialize<'de> for CreateSessionResponse {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let map: HashMap<String, OwnedValue> = HashMap::deserialize(deserializer)?;
+        let session_handle = map.get("session_handle").ok_or_else(|| {
+            serde::de::Error::custom(
+                "CreateSessionResponse failed to deserialize. Couldn't find a session_handle",
+            )
+        })?;
+
+        let path = if let Ok(object_path_str) = session_handle.downcast_ref::<&str>() {
+            ObjectPath::try_from(object_path_str).unwrap()
+        } else if let Ok(object_path) = session_handle.downcast_ref::<ObjectPath<'_>>() {
+            object_path
+        } else {
+            return Err(serde::de::Error::custom(
+                "Wrong session_handle type. Expected `s` or `o`.",
+            ));
+        };
+
+        Ok(Self {
+            session_handle: path.into(),
+        })
     }
 }

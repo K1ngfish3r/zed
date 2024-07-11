@@ -13,14 +13,15 @@ use serde::{
 };
 use zbus::{
     proxy::SignalStream,
-    zvariant::{ObjectPath, Signature, Type, Value},
+    zvariant::{ObjectPath, Type, Value},
 };
 
 use crate::{desktop::HandleToken, proxy::Proxy, Error};
 
 /// A typical response returned by the [`Request::response`].
 /// of a [`Request`].
-#[derive(Debug)]
+#[derive(Debug, Type)]
+#[zvariant(signature = "(ua{sv})")]
 pub enum Response<T>
 where
     T: for<'de> Deserialize<'de> + Type,
@@ -46,15 +47,6 @@ where
 
     pub fn other() -> Self {
         Self::Err(ResponseError::Other)
-    }
-}
-
-impl<T> Type for Response<T>
-where
-    T: for<'de> Deserialize<'de> + Type,
-{
-    fn signature() -> Signature<'static> {
-        <(ResponseType, HashMap<&str, Value<'_>>)>::signature()
     }
 }
 
@@ -282,5 +274,26 @@ where
         f.debug_tuple("Request")
             .field(&self.path().as_str())
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use zbus::zvariant::Value;
+
+    use super::*;
+
+    #[test]
+    fn response_signature() {
+        use crate::desktop::account::UserInformation;
+        assert_eq!(
+            <(ResponseType, HashMap<&str, Value<'_>>)>::signature(),
+            Response::<()>::signature(),
+        );
+        assert_eq!(
+            <(ResponseType, UserInformation)>::signature(),
+            Response::<UserInformation>::signature(),
+        );
+        assert_eq!(Response::<()>::signature(), "(ua{sv})");
     }
 }

@@ -45,8 +45,8 @@ use serde::Deserialize;
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use zbus::zvariant::{DeserializeDict, ObjectPath, OwnedObjectPath, SerializeDict, Type};
 
-use super::{HandleToken, Request, Session};
-use crate::{proxy::Proxy, Error, WindowIdentifier};
+use super::{session::SessionPortal, HandleToken, Request, Session};
+use crate::{desktop::session::CreateSessionResponse, proxy::Proxy, Error, WindowIdentifier};
 
 #[derive(SerializeDict, Type, Debug, Default)]
 /// Specified options for a [`InhibitProxy::create_monitor`] request.
@@ -86,15 +86,6 @@ pub enum InhibitFlags {
     #[doc(alias = "XDP_INHIBIT_FLAG_IDLE")]
     /// Idle.
     Idle,
-}
-
-#[derive(Debug, DeserializeDict, Type)]
-/// A response to a [`InhibitProxy::create_monitor`] request.
-#[zvariant(signature = "dict")]
-struct CreateMonitor {
-    // TODO: investigate why this doesn't return an ObjectPath
-    // replace with an ObjectPath once https://github.com/flatpak/xdg-desktop-portal/pull/609's merged
-    session_handle: String,
 }
 
 #[derive(Debug, DeserializeDict, Type)]
@@ -176,16 +167,16 @@ impl<'a> InhibitProxy<'a> {
     pub async fn create_monitor(
         &self,
         identifier: &WindowIdentifier,
-    ) -> Result<Session<'a>, Error> {
+    ) -> Result<Session<'a, Self>, Error> {
         let options = CreateMonitorOptions::default();
         let body = &(&identifier, &options);
         let (monitor, proxy) = futures_util::try_join!(
             self.0
-                .request::<CreateMonitor>(&options.handle_token, "CreateMonitor", body)
+                .request::<CreateSessionResponse>(&options.handle_token, "CreateMonitor", body)
                 .into_future(),
             Session::from_unique_name(&options.session_handle_token).into_future(),
         )?;
-        assert_eq!(proxy.path().as_str(), &monitor.response()?.session_handle);
+        assert_eq!(proxy.path(), &monitor.response()?.session_handle.as_ref());
         Ok(proxy)
     }
 
@@ -247,7 +238,7 @@ impl<'a> InhibitProxy<'a> {
     /// See also [`QueryEndResponse`](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Inhibit.html#org-freedesktop-portal-inhibit-queryendresponse).
     #[doc(alias = "QueryEndResponse")]
     #[doc(alias = "xdp_portal_session_monitor_query_end_response")]
-    pub async fn query_end_response(&self, session: &Session<'_>) -> Result<(), Error> {
+    pub async fn query_end_response(&self, session: &Session<'_, Self>) -> Result<(), Error> {
         self.0.call("QueryEndResponse", &(session)).await
     }
 }
@@ -259,3 +250,5 @@ impl<'a> std::ops::Deref for InhibitProxy<'a> {
         &self.0
     }
 }
+
+impl SessionPortal for InhibitProxy<'_> {}

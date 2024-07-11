@@ -1,4 +1,4 @@
-use std::ops::Deref;
+use std::{ops::Deref, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 use zbus::zvariant::Type;
@@ -6,26 +6,33 @@ use zbus::zvariant::Type;
 /// The application ID.
 ///
 /// See <https://developer.gnome.org/documentation/tutorials/application-id.html>.
-#[derive(Debug, Serialize, Deserialize, Type, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, Serialize, Type, PartialEq, Eq, Hash, Clone)]
 pub struct AppID(String);
+
+impl FromStr for AppID {
+    type Err = crate::Error;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if is_valid_app_id(value) {
+            Ok(Self(value.to_owned()))
+        } else {
+            Err(Self::Err::InvalidAppID)
+        }
+    }
+}
 
 impl TryFrom<String> for AppID {
     type Error = crate::Error;
 
-    fn try_from(string: String) -> Result<Self, Self::Error> {
-        if is_valid_app_id(&string) {
-            Ok(Self(string))
-        } else {
-            Err(Self::Error::InvalidAppID)
-        }
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        value.parse::<Self>()
     }
 }
 
 impl TryFrom<&str> for AppID {
     type Error = crate::Error;
 
-    fn try_from(s: &str) -> Result<Self, Self::Error> {
-        AppID::try_from(s.to_string())
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        value.parse::<Self>()
     }
 }
 
@@ -52,6 +59,18 @@ impl Deref for AppID {
 impl std::fmt::Display for AppID {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_ref())
+    }
+}
+
+impl<'de> Deserialize<'de> for AppID {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let app_id = String::deserialize(deserializer)?;
+        app_id
+            .parse::<Self>()
+            .map_err(|err| serde::de::Error::custom(err.to_string()))
     }
 }
 

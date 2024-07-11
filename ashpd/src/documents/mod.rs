@@ -1,14 +1,19 @@
 //! # Examples
 //!
 //! ```rust,no_run
-//! use ashpd::documents::{Documents, Permission};
+//! use std::str::FromStr;
+//!
+//! use ashpd::{
+//!     documents::{Documents, Permission},
+//!     AppID,
+//! };
 //!
 //! async fn run() -> ashpd::Result<()> {
 //!     let proxy = Documents::new().await?;
 //!
 //!     println!("{:#?}", proxy.mount_point().await?);
-//!
-//!     for (doc_id, host_path) in proxy.list(Some("org.mozilla.firefox".try_into()?)).await? {
+//!     let app_id = AppID::from_str("org.mozilla.firefox").unwrap();
+//!     for (doc_id, host_path) in proxy.list(Some(&app_id)).await? {
 //!         if doc_id == "f2ee988d".into() {
 //!             let info = proxy.info(doc_id).await?;
 //!             println!("{:#?}", info);
@@ -16,18 +21,10 @@
 //!     }
 //!
 //!     proxy
-//!         .grant_permissions(
-//!             "f2ee988d",
-//!             "org.mozilla.firefox".try_into().unwrap(),
-//!             &[Permission::GrantPermissions],
-//!         )
+//!         .grant_permissions("f2ee988d", &app_id, &[Permission::GrantPermissions])
 //!         .await?;
 //!     proxy
-//!         .revoke_permissions(
-//!             "f2ee988d",
-//!             "org.mozilla.firefox".try_into()?,
-//!             &[Permission::Write],
-//!         )
+//!         .revoke_permissions("f2ee988d", &app_id, &[Permission::Write])
 //!         .await?;
 //!
 //!     proxy.delete("f2ee988d").await?;
@@ -49,7 +46,7 @@ use crate::{proxy::Proxy, AppID, Error, FilePath};
 #[bitflags]
 #[derive(Serialize_repr, Deserialize_repr, PartialEq, Eq, Copy, Clone, Debug, Type)]
 #[repr(u32)]
-///
+/// Document flags
 pub enum DocumentFlags {
     /// Reuse the existing document store entry for the file.
     ReuseExisting,
@@ -218,11 +215,11 @@ impl<'a> Documents<'a> {
         &self,
         o_path_fds: &[&BorrowedFd<'_>],
         flags: BitFlags<DocumentFlags>,
-        app_id: Option<AppID>,
+        app_id: Option<&AppID>,
         permissions: &[Permission],
     ) -> Result<(Vec<DocumentID>, HashMap<String, OwnedValue>), Error> {
         let o_path: Vec<Fd> = o_path_fds.iter().map(Fd::from).collect();
-        let app_id = app_id.as_deref().unwrap_or("");
+        let app_id = app_id.map(|id| id.as_ref()).unwrap_or("");
         self.0
             .call_versioned("AddFull", &(o_path, flags, app_id, permissions), 2)
             .await
@@ -298,10 +295,10 @@ impl<'a> Documents<'a> {
         o_path_fd: &BorrowedFd<'_>,
         filename: impl AsRef<Path>,
         flags: BitFlags<DocumentFlags>,
-        app_id: Option<AppID>,
+        app_id: Option<&AppID>,
         permissions: &[Permission],
     ) -> Result<(DocumentID, HashMap<String, OwnedValue>), Error> {
-        let app_id = app_id.as_deref().unwrap_or("");
+        let app_id = app_id.map(|id| id.as_ref()).unwrap_or("");
         let filename = FilePath::new(filename)?;
         self.0
             .call_versioned(
@@ -361,7 +358,7 @@ impl<'a> Documents<'a> {
     pub async fn grant_permissions(
         &self,
         doc_id: impl Into<DocumentID>,
-        app_id: AppID,
+        app_id: &AppID,
         permissions: &[Permission],
     ) -> Result<(), Error> {
         self.0
@@ -414,9 +411,9 @@ impl<'a> Documents<'a> {
     #[doc(alias = "List")]
     pub async fn list(
         &self,
-        app_id: Option<AppID>,
+        app_id: Option<&AppID>,
     ) -> Result<HashMap<DocumentID, FilePath>, Error> {
-        let app_id = app_id.as_deref().unwrap_or("");
+        let app_id = app_id.map(|id| id.as_ref()).unwrap_or("");
         let response: HashMap<String, FilePath> = self.0.call("List", &(app_id)).await?;
 
         let mut new_response: HashMap<DocumentID, FilePath> = HashMap::new();
@@ -474,12 +471,33 @@ impl<'a> Documents<'a> {
     pub async fn revoke_permissions(
         &self,
         doc_id: impl Into<DocumentID>,
-        app_id: AppID,
+        app_id: &AppID,
         permissions: &[Permission],
     ) -> Result<(), Error> {
         self.0
             .call("RevokePermissions", &(doc_id.into(), app_id, permissions))
             .await
+    }
+
+    /// Retrieves the host filesystem paths from their document IDs.
+    ///
+    /// # Arguments
+    ///
+    /// * `doc_ids` - A list of file IDs in the document store.
+    ///
+    /// # Returns
+    ///
+    /// A dictionary mapping document IDs to the paths in the host filesystem
+    ///
+    /// # Specifications
+    ///
+    /// See also [`GetHostPaths`](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Documents.html#org-freedesktop-portal-documents-gethostpaths).
+    #[doc(alias = "GetHostPaths")]
+    pub async fn host_paths(
+        &self,
+        doc_ids: &[DocumentID],
+    ) -> Result<HashMap<DocumentID, FilePath>, Error> {
+        self.0.call_versioned("GetHostPaths", &(doc_ids,), 5).await
     }
 }
 
@@ -498,7 +516,11 @@ pub use file_transfer::FileTransfer;
 
 #[cfg(test)]
 mod tests {
-    use crate::documents::Permission;
+    use std::collections::HashMap;
+
+    use zbus::zvariant::Type;
+
+    use crate::{app_id::DocumentID, documents::Permission, FilePath};
 
     #[test]
     fn serialize_deserialize() {
@@ -508,5 +530,7 @@ mod tests {
 
         let decoded = serde_json::from_str(&string).unwrap();
         assert_eq!(permission, decoded);
+
+        assert_eq!(HashMap::<DocumentID, FilePath>::signature(), "a{say}");
     }
 }

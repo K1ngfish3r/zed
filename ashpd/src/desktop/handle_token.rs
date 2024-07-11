@@ -15,7 +15,7 @@ use zbus::{names::OwnedMemberName, zvariant::Type};
 ///
 /// A valid object path element must only contain the ASCII characters
 /// `[A-Z][a-z][0-9]_`
-#[derive(Serialize, Deserialize, Type)]
+#[derive(Serialize, Type)]
 pub struct HandleToken(OwnedMemberName);
 
 impl Display for HandleToken {
@@ -40,7 +40,7 @@ impl Default for HandleToken {
             .take(10)
             .map(char::from)
             .collect();
-        HandleToken::try_from(format!("ashpd_{token}")).unwrap()
+        format!("ashpd_{token}").parse().unwrap()
     }
 }
 
@@ -55,45 +55,64 @@ impl std::fmt::Display for HandleInvalidCharacter {
 
 impl std::error::Error for HandleInvalidCharacter {}
 
-impl TryFrom<&str> for HandleToken {
-    type Error = HandleInvalidCharacter;
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
+impl std::str::FromStr for HandleToken {
+    type Err = HandleInvalidCharacter;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
         for char in value.chars() {
             if !char.is_ascii_alphanumeric() && char != '_' {
                 return Err(HandleInvalidCharacter(char));
             }
         }
-        Ok(Self(
-            OwnedMemberName::try_from(value).expect("Invalid handle token"),
-        ))
+        Ok(Self(OwnedMemberName::try_from(value).unwrap()))
     }
 }
 
 impl TryFrom<String> for HandleToken {
     type Error = HandleInvalidCharacter;
+
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        HandleToken::try_from(value.as_str())
+        value.parse::<Self>()
     }
 }
 
+impl TryFrom<&str> for HandleToken {
+    type Error = HandleInvalidCharacter;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        value.parse::<Self>()
+    }
+}
+
+impl<'de> Deserialize<'de> for HandleToken {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let token = String::deserialize(deserializer)?;
+        token
+            .parse::<Self>()
+            .map_err(|err| serde::de::Error::custom(err.to_string()))
+    }
+}
 #[cfg(test)]
 mod test {
-    use std::convert::TryFrom;
+    use std::str::FromStr;
 
     use super::HandleToken;
 
     #[test]
     fn handle_token() {
-        assert!(HandleToken::try_from("token").is_ok());
+        assert!(HandleToken::from_str("token").is_ok());
 
-        let token = HandleToken::try_from("token2").unwrap();
+        let token = HandleToken::from_str("token2").unwrap();
         assert_eq!(token.to_string(), "token2".to_string());
 
-        assert!(HandleToken::try_from("/test").is_err());
+        assert!(HandleToken::from_str("/test").is_err());
 
-        assert!(HandleToken::try_from("تجربة").is_err());
+        assert!(HandleToken::from_str("تجربة").is_err());
 
-        assert!(HandleToken::try_from("test_token").is_ok());
+        assert!(HandleToken::from_str("test_token").is_ok());
 
         HandleToken::default(); // ensure we don't panic
     }

@@ -7,23 +7,12 @@
             target_os = "ios",
             target_os = "macos",
             target_os = "tvos",
-            target_os = "visionos",
             target_os = "watchos",
         )
     )),
-    not(any(
-        target_os = "espidf",
-        target_os = "haiku",
-        target_os = "hermit",
-        target_os = "nto",
-        target_os = "solaris",
-        target_os = "vita"
-    )),
+    not(any(target_os = "solaris", target_os = "vita")),
 ))]
 mod fdbased {
-    use std::io;
-    use std::os::fd::AsRawFd;
-
     #[cfg(all(
         not(mio_unsupported_force_waker_pipe),
         any(target_os = "linux", target_os = "android"),
@@ -41,6 +30,8 @@ mod fdbased {
     use crate::sys::unix::waker::pipe::WakerInternal;
     use crate::sys::Selector;
     use crate::{Interest, Token};
+    use std::io;
+    use std::os::unix::io::AsRawFd;
 
     #[derive(Debug)]
     pub struct Waker {
@@ -69,39 +60,21 @@ mod fdbased {
             target_os = "ios",
             target_os = "macos",
             target_os = "tvos",
-            target_os = "visionos",
             target_os = "watchos",
         )
     )),
-    not(any(
-        target_os = "espidf",
-        target_os = "haiku",
-        target_os = "hermit",
-        target_os = "nto",
-        target_os = "solaris",
-        target_os = "vita"
-    )),
+    not(any(target_os = "solaris", target_os = "vita")),
 ))]
 pub use self::fdbased::Waker;
 
 #[cfg(all(
     not(mio_unsupported_force_waker_pipe),
-    any(
-        target_os = "android",
-        target_os = "espidf",
-        target_os = "hermit",
-        target_os = "linux",
-    )
+    any(target_os = "linux", target_os = "android", target_os = "espidf")
 ))]
 mod eventfd {
     use std::fs::File;
     use std::io::{self, Read, Write};
-    #[cfg(not(target_os = "hermit"))]
-    use std::os::fd::{AsRawFd, FromRawFd, RawFd};
-    // TODO: once <https://github.com/rust-lang/rust/issues/126198> is fixed this
-    // can use `std::os::fd` and be merged with the above.
-    #[cfg(target_os = "hermit")]
-    use std::os::hermit::io::{AsRawFd, FromRawFd, RawFd};
+    use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 
     /// Waker backed by `eventfd`.
     ///
@@ -127,7 +100,6 @@ mod eventfd {
             Ok(WakerInternal { fd: file })
         }
 
-        #[allow(clippy::unused_io_amount)] // Don't care about partial writes.
         pub fn wake(&self) -> io::Result<()> {
             let buf: [u8; 8] = 1u64.to_ne_bytes();
             match (&self.fd).write(&buf) {
@@ -142,17 +114,12 @@ mod eventfd {
             }
         }
 
-        #[cfg(any(
-            mio_unsupported_force_poll_poll,
-            target_os = "espidf",
-            target_os = "hermit"
-        ))]
+        #[cfg(mio_unsupported_force_poll_poll)]
         pub fn ack_and_reset(&self) {
             let _ = self.reset();
         }
 
         /// Reset the eventfd object, only need to call this if `wake` fails.
-        #[allow(clippy::unused_io_amount)] // Don't care about partial reads.
         fn reset(&self) -> io::Result<()> {
             let mut buf: [u8; 8] = 0u64.to_ne_bytes();
             match (&self.fd).read(&mut buf) {
@@ -173,12 +140,9 @@ mod eventfd {
 }
 
 #[cfg(all(
+    mio_unsupported_force_poll_poll,
     not(mio_unsupported_force_waker_pipe),
-    any(
-        mio_unsupported_force_poll_poll,
-        target_os = "espidf",
-        target_os = "hermit",
-    )
+    any(target_os = "linux", target_os = "android", target_os = "espidf")
 ))]
 pub(crate) use self::eventfd::WakerInternal;
 
@@ -189,7 +153,6 @@ pub(crate) use self::eventfd::WakerInternal;
         target_os = "ios",
         target_os = "macos",
         target_os = "tvos",
-        target_os = "visionos",
         target_os = "watchos",
     )
 ))]
@@ -231,7 +194,6 @@ mod kqueue {
         target_os = "ios",
         target_os = "macos",
         target_os = "tvos",
-        target_os = "visionos",
         target_os = "watchos",
     )
 ))]
@@ -241,10 +203,8 @@ pub use self::kqueue::Waker;
     mio_unsupported_force_waker_pipe,
     target_os = "aix",
     target_os = "dragonfly",
-    target_os = "haiku",
     target_os = "illumos",
     target_os = "netbsd",
-    target_os = "nto",
     target_os = "openbsd",
     target_os = "redox",
     target_os = "solaris",
@@ -254,7 +214,7 @@ mod pipe {
     use crate::sys::unix::pipe;
     use std::fs::File;
     use std::io::{self, Read, Write};
-    use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+    use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 
     /// Waker backed by a unix pipe.
     ///
@@ -296,11 +256,8 @@ mod pipe {
 
         #[cfg(any(
             mio_unsupported_force_poll_poll,
-            target_os = "espidf",
-            target_os = "haiku",
-            target_os = "nto",
             target_os = "solaris",
-            target_os = "vita",
+            target_os = "vita"
         ))]
         pub fn ack_and_reset(&self) {
             self.empty();
@@ -339,8 +296,6 @@ mod pipe {
             target_os = "redox",
         )
     ),
-    target_os = "haiku",
-    target_os = "nto",
     target_os = "solaris",
     target_os = "vita",
 ))]
@@ -348,12 +303,8 @@ pub(crate) use self::pipe::WakerInternal;
 
 #[cfg(any(
     mio_unsupported_force_poll_poll,
-    target_os = "espidf",
-    target_os = "haiku",
-    target_os = "hermit",
-    target_os = "nto",
     target_os = "solaris",
-    target_os = "vita",
+    target_os = "vita"
 ))]
 mod poll {
     use crate::sys::Selector;
@@ -382,11 +333,7 @@ mod poll {
 
 #[cfg(any(
     mio_unsupported_force_poll_poll,
-    target_os = "espidf",
-    target_os = "haiku",
-    target_os = "hermit",
-    target_os = "nto",
     target_os = "solaris",
-    target_os = "vita",
+    target_os = "vita"
 ))]
 pub use self::poll::Waker;

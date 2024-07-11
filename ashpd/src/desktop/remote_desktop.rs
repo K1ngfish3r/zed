@@ -2,7 +2,10 @@
 //!
 //! ```rust,no_run
 //! use ashpd::{
-//!     desktop::remote_desktop::{DeviceType, KeyState, RemoteDesktop},
+//!     desktop::{
+//!         remote_desktop::{DeviceType, KeyState, RemoteDesktop},
+//!         PersistMode,
+//!     },
 //!     WindowIdentifier,
 //! };
 //!
@@ -10,7 +13,12 @@
 //!     let proxy = RemoteDesktop::new().await?;
 //!     let session = proxy.create_session().await?;
 //!     proxy
-//!         .select_devices(&session, DeviceType::Keyboard | DeviceType::Pointer)
+//!         .select_devices(
+//!             &session,
+//!             DeviceType::Keyboard | DeviceType::Pointer,
+//!             None,
+//!             PersistMode::DoNot,
+//!         )
 //!         .await?;
 //!
 //!     let response = proxy
@@ -38,7 +46,8 @@
 //! use ashpd::{
 //!     desktop::{
 //!         remote_desktop::{DeviceType, KeyState, RemoteDesktop},
-//!         screencast::{CursorMode, PersistMode, Screencast, SourceType},
+//!         screencast::{CursorMode, Screencast, SourceType},
+//!         PersistMode,
 //!     },
 //!     WindowIdentifier,
 //! };
@@ -50,7 +59,12 @@
 //!     let session = remote_desktop.create_session().await?;
 //!
 //!     remote_desktop
-//!         .select_devices(&session, DeviceType::Keyboard | DeviceType::Pointer)
+//!         .select_devices(
+//!             &session,
+//!             DeviceType::Keyboard | DeviceType::Pointer,
+//!             None,
+//!             PersistMode::DoNot,
+//!         )
 //!         .await?;
 //!     screencast
 //!         .select_sources(
@@ -88,8 +102,10 @@ use futures_util::TryFutureExt;
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use zbus::zvariant::{self, DeserializeDict, SerializeDict, Type, Value};
 
-use super::{screencast::Stream, HandleToken, Request, Session};
-use crate::{proxy::Proxy, Error, WindowIdentifier};
+use super::{
+    screencast::Stream, session::SessionPortal, HandleToken, PersistMode, Request, Session,
+};
+use crate::{desktop::session::CreateSessionResponse, proxy::Proxy, Error, WindowIdentifier};
 
 #[cfg_attr(feature = "glib", derive(glib::Enum))]
 #[cfg_attr(feature = "glib", enum_type(name = "AshpdKeyState"))]
@@ -148,16 +164,6 @@ struct CreateRemoteOptions {
     session_handle_token: HandleToken,
 }
 
-#[derive(DeserializeDict, Type, Debug)]
-/// A response to a [`RemoteDesktop::create_session`] request.
-#[zvariant(signature = "dict")]
-struct CreateSession {
-    // TODO: investigate why this doesn't return an ObjectPath
-    // replace with an ObjectPath once https://github.com/flatpak/xdg-desktop-portal/pull/609's merged
-    /// A string that will be used as the last element of the session handle.
-    session_handle: String,
-}
-
 #[derive(SerializeDict, Type, Debug, Default)]
 /// Specified options for a [`RemoteDesktop::select_devices`] request.
 #[zvariant(signature = "dict")]
@@ -166,12 +172,24 @@ struct SelectDevicesOptions {
     handle_token: HandleToken,
     /// The device types to request remote controlling of. Default is all.
     types: Option<BitFlags<DeviceType>>,
+    restore_token: Option<String>,
+    persist_mode: Option<PersistMode>,
 }
 
 impl SelectDevicesOptions {
     /// Sets the device types to request remote controlling of.
     pub fn types(mut self, types: impl Into<Option<BitFlags<DeviceType>>>) -> Self {
         self.types = types.into();
+        self
+    }
+
+    pub fn persist_mode(mut self, persist_mode: impl Into<Option<PersistMode>>) -> Self {
+        self.persist_mode = persist_mode.into();
+        self
+    }
+
+    pub fn restore_token<'a>(mut self, token: impl Into<Option<&'a str>>) -> Self {
+        self.restore_token = token.into().map(ToOwned::to_owned);
         self
     }
 }
@@ -190,6 +208,7 @@ struct StartRemoteOptions {
 pub struct SelectedDevices {
     devices: BitFlags<DeviceType>,
     streams: Option<Vec<Stream>>,
+    restore_token: Option<String>,
 }
 
 impl SelectedDevices {
@@ -201,6 +220,11 @@ impl SelectedDevices {
     /// The selected streams if a ScreenCast portal is used on the same session
     pub fn streams(&self) -> Option<&[Stream]> {
         self.streams.as_deref()
+    }
+
+    /// The session restore token.
+    pub fn restore_token(&self) -> Option<&str> {
+        self.restore_token.as_deref()
     }
 }
 
@@ -227,15 +251,15 @@ impl<'a> RemoteDesktop<'a> {
     /// See also [`CreateSession`](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.RemoteDesktop.html#org-freedesktop-portal-remotedesktop-createsession).
     #[doc(alias = "CreateSession")]
     #[doc(alias = "xdp_portal_create_remote_desktop_session")]
-    pub async fn create_session(&self) -> Result<Session<'a>, Error> {
+    pub async fn create_session(&self) -> Result<Session<'a, Self>, Error> {
         let options = CreateRemoteOptions::default();
         let (request, proxy) = futures_util::try_join!(
             self.0
-                .request::<CreateSession>(&options.handle_token, "CreateSession", &options)
+                .request::<CreateSessionResponse>(&options.handle_token, "CreateSession", &options)
                 .into_future(),
             Session::from_unique_name(&options.session_handle_token).into_future()
         )?;
-        assert_eq!(proxy.path().as_str(), &request.response()?.session_handle);
+        assert_eq!(proxy.path(), &request.response()?.session_handle.as_ref());
         Ok(proxy)
     }
 
@@ -253,10 +277,15 @@ impl<'a> RemoteDesktop<'a> {
     #[doc(alias = "SelectDevices")]
     pub async fn select_devices(
         &self,
-        session: &Session<'_>,
+        session: &Session<'_, Self>,
         types: BitFlags<DeviceType>,
+        restore_token: Option<&str>,
+        persist_mode: PersistMode,
     ) -> Result<Request<()>, Error> {
-        let options = SelectDevicesOptions::default().types(types);
+        let options = SelectDevicesOptions::default()
+            .types(types)
+            .persist_mode(persist_mode)
+            .restore_token(restore_token);
         self.0
             .empty_request(&options.handle_token, "SelectDevices", &(session, &options))
             .await
@@ -280,7 +309,7 @@ impl<'a> RemoteDesktop<'a> {
     #[doc(alias = "Start")]
     pub async fn start(
         &self,
-        session: &Session<'_>,
+        session: &Session<'_, Self>,
         identifier: &WindowIdentifier,
     ) -> Result<Request<SelectedDevices>, Error> {
         let options = StartRemoteOptions::default();
@@ -311,7 +340,7 @@ impl<'a> RemoteDesktop<'a> {
     #[doc(alias = "NotifyKeyboardKeycode")]
     pub async fn notify_keyboard_keycode(
         &self,
-        session: &Session<'_>,
+        session: &Session<'_, Self>,
         keycode: i32,
         state: KeyState,
     ) -> Result<(), Error> {
@@ -341,7 +370,7 @@ impl<'a> RemoteDesktop<'a> {
     #[doc(alias = "NotifyKeyboardKeysym")]
     pub async fn notify_keyboard_keysym(
         &self,
-        session: &Session<'_>,
+        session: &Session<'_, Self>,
         keysym: i32,
         state: KeyState,
     ) -> Result<(), Error> {
@@ -368,7 +397,11 @@ impl<'a> RemoteDesktop<'a> {
     ///
     /// See also [`NotifyTouchUp`](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.RemoteDesktop.html#org-freedesktop-portal-remotedesktop-notifytouchup).
     #[doc(alias = "NotifyTouchUp")]
-    pub async fn notify_touch_up(&self, session: &Session<'_>, slot: u32) -> Result<(), Error> {
+    pub async fn notify_touch_up(
+        &self,
+        session: &Session<'_, Self>,
+        slot: u32,
+    ) -> Result<(), Error> {
         // The `notify` methods don't take any options for now
         // see https://github.com/flatpak/xdg-desktop-portal/blob/master/src/remote-desktop.c#L723
         let options: HashMap<&str, Value<'_>> = HashMap::new();
@@ -399,7 +432,7 @@ impl<'a> RemoteDesktop<'a> {
     #[doc(alias = "NotifyTouchDown")]
     pub async fn notify_touch_down(
         &self,
-        session: &Session<'_>,
+        session: &Session<'_, Self>,
         stream: u32,
         slot: u32,
         x: f64,
@@ -435,7 +468,7 @@ impl<'a> RemoteDesktop<'a> {
     #[doc(alias = "NotifyTouchMotion")]
     pub async fn notify_touch_motion(
         &self,
-        session: &Session<'_>,
+        session: &Session<'_, Self>,
         stream: u32,
         slot: u32,
         x: f64,
@@ -467,7 +500,7 @@ impl<'a> RemoteDesktop<'a> {
     #[doc(alias = "NotifyPointerMotionAbsolute")]
     pub async fn notify_pointer_motion_absolute(
         &self,
-        session: &Session<'_>,
+        session: &Session<'_, Self>,
         stream: u32,
         x: f64,
         y: f64,
@@ -500,7 +533,7 @@ impl<'a> RemoteDesktop<'a> {
     #[doc(alias = "NotifyPointerMotion")]
     pub async fn notify_pointer_motion(
         &self,
-        session: &Session<'_>,
+        session: &Session<'_, Self>,
         dx: f64,
         dy: f64,
     ) -> Result<(), Error> {
@@ -532,7 +565,7 @@ impl<'a> RemoteDesktop<'a> {
     #[doc(alias = "NotifyPointerButton")]
     pub async fn notify_pointer_button(
         &self,
-        session: &Session<'_>,
+        session: &Session<'_, Self>,
         button: i32,
         state: KeyState,
     ) -> Result<(), Error> {
@@ -561,7 +594,7 @@ impl<'a> RemoteDesktop<'a> {
     #[doc(alias = "NotifyPointerAxisDiscrete")]
     pub async fn notify_pointer_axis_discrete(
         &self,
-        session: &Session<'_>,
+        session: &Session<'_, Self>,
         axis: Axis,
         steps: i32,
     ) -> Result<(), Error> {
@@ -599,7 +632,7 @@ impl<'a> RemoteDesktop<'a> {
     #[doc(alias = "NotifyPointerAxis")]
     pub async fn notify_pointer_axis(
         &self,
-        session: &Session<'_>,
+        session: &Session<'_, Self>,
         dx: f64,
         dy: f64,
         finish: bool,
@@ -632,7 +665,7 @@ impl<'a> RemoteDesktop<'a> {
     ///
     /// See also [`ConnectToEIS`](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.RemoteDesktop.html#org-freedesktop-portal-remotedesktop-connecttoeis).
     #[doc(alias = "ConnectToEIS")]
-    pub async fn connect_to_eis(&self, session: &Session<'_>) -> Result<OwnedFd, Error> {
+    pub async fn connect_to_eis(&self, session: &Session<'_, Self>) -> Result<OwnedFd, Error> {
         // `ConnectToEIS` doesn't take any options for now
         // see https://github.com/flatpak/xdg-desktop-portal/blob/master/src/remote-desktop.c#L1464
         let options: HashMap<&str, Value<'_>> = HashMap::new();
@@ -661,3 +694,5 @@ impl<'a> std::ops::Deref for RemoteDesktop<'a> {
         &self.0
     }
 }
+
+impl SessionPortal for RemoteDesktop<'_> {}
