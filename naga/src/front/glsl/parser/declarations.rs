@@ -13,8 +13,8 @@ use crate::{
         Error, ErrorKind, Frontend, Span,
     },
     proc::Alignment,
-    AddressSpace, Expression, FunctionResult, Handle, ScalarKind, Statement, StructMember, Type,
-    TypeInner,
+    AddressSpace, Expression, FunctionResult, Handle, Scalar, ScalarKind, Statement, StructMember,
+    Type, TypeInner,
 };
 
 use super::{DeclarationContext, ParsingContext, Result};
@@ -34,23 +34,19 @@ fn element_or_member_type(
 ) -> Handle<Type> {
     match types[ty].inner {
         // The child type of a vector is a scalar of the same kind and width
-        TypeInner::Vector { kind, width, .. } => types.insert(
+        TypeInner::Vector { scalar, .. } => types.insert(
             Type {
                 name: None,
-                inner: TypeInner::Scalar { kind, width },
+                inner: TypeInner::Scalar(scalar),
             },
             Default::default(),
         ),
         // The child type of a matrix is a vector of floats with the same
         // width and the size of the matrix rows.
-        TypeInner::Matrix { rows, width, .. } => types.insert(
+        TypeInner::Matrix { rows, scalar, .. } => types.insert(
             Type {
                 name: None,
-                inner: TypeInner::Vector {
-                    size: rows,
-                    kind: ScalarKind::Float,
-                    width,
-                },
+                inner: TypeInner::Vector { size: rows, scalar },
             },
             Default::default(),
         ),
@@ -156,8 +152,8 @@ impl<'source> ParsingContext<'source> {
             let (mut init, init_meta) = ctx.lower_expect(stmt, frontend, expr, ExprPos::Rhs)?;
 
             let scalar_components = scalar_components(&ctx.module.types[ty].inner);
-            if let Some((kind, width)) = scalar_components {
-                ctx.implicit_conversion(&mut init, init_meta, kind, width)?;
+            if let Some(scalar) = scalar_components {
+                ctx.implicit_conversion(&mut init, init_meta, scalar)?;
             }
 
             Ok((init, init_meta))
@@ -233,9 +229,8 @@ impl<'source> ParsingContext<'source> {
                     let (mut expr, init_meta) = self.parse_initializer(frontend, ty, ctx.ctx)?;
 
                     let scalar_components = scalar_components(&ctx.ctx.module.types[ty].inner);
-                    if let Some((kind, width)) = scalar_components {
-                        ctx.ctx
-                            .implicit_conversion(&mut expr, init_meta, kind, width)?;
+                    if let Some(scalar) = scalar_components {
+                        ctx.ctx.implicit_conversion(&mut expr, init_meta, scalar)?;
                     }
 
                     ctx.ctx.is_const = prev_const;
@@ -256,7 +251,7 @@ impl<'source> ParsingContext<'source> {
                     init.and_then(|expr| ctx.ctx.lift_up_const_expression(expr).ok());
                 late_initializer = None;
             } else if let Some(init) = init {
-                if ctx.is_inside_loop || !ctx.ctx.expression_constness.is_const(init) {
+                if ctx.is_inside_loop || !ctx.ctx.local_expression_kind_tracker.is_const(init) {
                     decl_initializer = None;
                     late_initializer = Some(init);
                 } else {
@@ -331,7 +326,12 @@ impl<'source> ParsingContext<'source> {
 
                             let result = ty.map(|ty| FunctionResult { ty, binding: None });
 
-                            let mut context = Context::new(frontend, ctx.module, false)?;
+                            let mut context = Context::new(
+                                frontend,
+                                ctx.module,
+                                false,
+                                ctx.global_expression_kind_tracker,
+                            )?;
 
                             self.parse_function_args(frontend, &mut context)?;
 
@@ -509,10 +509,10 @@ impl<'source> ParsingContext<'source> {
                     let (ty, meta) = self.parse_type_non_void(frontend, ctx)?;
 
                     match ctx.module.types[ty].inner {
-                        TypeInner::Scalar {
+                        TypeInner::Scalar(Scalar {
                             kind: ScalarKind::Float | ScalarKind::Sint,
                             ..
-                        } => {}
+                        }) => {}
                         _ => frontend.errors.push(Error {
                             kind: ErrorKind::SemanticError(
                                 "Precision statement can only work on floats and ints".into(),

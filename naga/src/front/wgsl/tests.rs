@@ -17,6 +17,7 @@ fn parse_comment() {
 #[test]
 fn parse_types() {
     parse_str("const a : i32 = 2;").unwrap();
+    parse_str("const a : u64 = 2lu;").unwrap();
     assert!(parse_str("const a : x32 = 2;").is_err());
     parse_str("var t: texture_2d<f32>;").unwrap();
     parse_str("var t: texture_cube_array<i32>;").unwrap();
@@ -76,7 +77,7 @@ fn parse_type_cast() {
     assert!(parse_str(
         "
         fn main() {
-            let x: vec2<f32> = vec2<f32>(0);
+            let x: vec2<f32> = vec2<f32>(0i, 0i);
         }
     ",
     )
@@ -313,7 +314,7 @@ fn parse_texture_load() {
         "
         var t: texture_3d<u32>;
         fn foo() {
-            let r: vec4<u32> = textureLoad(t, vec3<u32>(0.0, 1.0, 2.0), 1);
+            let r: vec4<u32> = textureLoad(t, vec3<u32>(0u, 1u, 2u), 1);
         }
     ",
     )

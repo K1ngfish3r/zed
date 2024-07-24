@@ -1,14 +1,22 @@
+#[cfg(all(feature = "termcolor", not(feature = "paris")))]
 use log::*;
+#[cfg(feature = "termcolor")]
 use simplelog::*;
 
 #[cfg(feature = "termcolor")]
 fn main() {
     let config = ConfigBuilder::new()
-        .set_level_color(Level::Error, Color::Magenta)
-        .set_level_color(Level::Trace, Color::Green)
+        .set_level_color(Level::Error, Some(Color::Magenta))
+        .set_level_color(Level::Trace, Some(Color::Green))
         .build();
 
-    TermLogger::init(LevelFilter::Trace, config, TerminalMode::Stdout).unwrap();
+    TermLogger::init(
+        LevelFilter::Trace,
+        config,
+        TerminalMode::Stdout,
+        ColorChoice::Auto,
+    )
+    .unwrap();
     error!("Magenta error");
     warn!("Yellow warning");
     info!("Blue info");

@@ -13,11 +13,12 @@ mod layout;
 mod ray;
 mod recyclable;
 mod selection;
+mod subgroup;
 mod writer;
 
 pub use spirv::Capability;
 
-use crate::arena::Handle;
+use crate::arena::{Handle, HandleVec};
 use crate::proc::{BoundsCheckPolicies, TypeResolution};
 
 use spirv::Word;
@@ -70,6 +71,8 @@ pub enum Error {
     FeatureNotImplemented(&'static str),
     #[error("module is not validated properly: {0}")]
     Validation(&'static str),
+    #[error("overrides should not be present at this stage")]
+    Override,
 }
 
 #[derive(Default)]
@@ -245,7 +248,7 @@ impl LocalImageType {
 /// this, by converting everything possible to a `LocalType` before inspecting
 /// it.
 ///
-/// ## `Localtype` equality and SPIR-V `OpType` uniqueness
+/// ## `LocalType` equality and SPIR-V `OpType` uniqueness
 ///
 /// The definition of `Eq` on `LocalType` is carefully chosen to help us follow
 /// certain SPIR-V rules. SPIR-V §2.8 requires some classes of `OpType...`
@@ -276,8 +279,7 @@ enum LocalType {
         /// If `None`, this represents a scalar type. If `Some`, this represents
         /// a vector type of the given size.
         vector_size: Option<crate::VectorSize>,
-        kind: crate::ScalarKind,
-        width: crate::Bytes,
+        scalar: crate::Scalar,
         pointer_space: Option<spirv::StorageClass>,
     },
     /// A matrix of floating-point values.
@@ -355,28 +357,24 @@ struct LookupFunctionType {
 
 fn make_local(inner: &crate::TypeInner) -> Option<LocalType> {
     Some(match *inner {
-        crate::TypeInner::Scalar { kind, width } | crate::TypeInner::Atomic { kind, width } => {
-            LocalType::Value {
-                vector_size: None,
-                kind,
-                width,
-                pointer_space: None,
-            }
-        }
-        crate::TypeInner::Vector { size, kind, width } => LocalType::Value {
+        crate::TypeInner::Scalar(scalar) | crate::TypeInner::Atomic(scalar) => LocalType::Value {
+            vector_size: None,
+            scalar,
+            pointer_space: None,
+        },
+        crate::TypeInner::Vector { size, scalar } => LocalType::Value {
             vector_size: Some(size),
-            kind,
-            width,
+            scalar,
             pointer_space: None,
         },
         crate::TypeInner::Matrix {
             columns,
             rows,
-            width,
+            scalar,
         } => LocalType::Matrix {
             columns,
             rows,
-            width,
+            width: scalar.width,
         },
         crate::TypeInner::Pointer { base, space } => LocalType::Pointer {
             base,
@@ -384,13 +382,11 @@ fn make_local(inner: &crate::TypeInner) -> Option<LocalType> {
         },
         crate::TypeInner::ValuePointer {
             size,
-            kind,
-            width,
+            scalar,
             space,
         } => LocalType::Value {
             vector_size: size,
-            kind,
-            width,
+            scalar,
             pointer_space: Some(helpers::map_storage_class(space)),
         },
         crate::TypeInner::Image {
@@ -424,7 +420,7 @@ enum Dimension {
 /// [emit]: index.html#expression-evaluation-time-and-scope
 #[derive(Default)]
 struct CachedExpressions {
-    ids: Vec<Word>,
+    ids: HandleVec<crate::Expression, Word>,
 }
 impl CachedExpressions {
     fn reset(&mut self, length: usize) {
@@ -435,7 +431,7 @@ impl CachedExpressions {
 impl ops::Index<Handle<crate::Expression>> for CachedExpressions {
     type Output = Word;
     fn index(&self, h: Handle<crate::Expression>) -> &Word {
-        let id = &self.ids[h.index()];
+        let id = &self.ids[h];
         if *id == 0 {
             unreachable!("Expression {:?} is not cached!", h);
         }
@@ -444,7 +440,7 @@ impl ops::Index<Handle<crate::Expression>> for CachedExpressions {
 }
 impl ops::IndexMut<Handle<crate::Expression>> for CachedExpressions {
     fn index_mut(&mut self, h: Handle<crate::Expression>) -> &mut Word {
-        let id = &mut self.ids[h.index()];
+        let id = &mut self.ids[h];
         if *id != 0 {
             unreachable!("Expression {:?} is already cached!", h);
         }
@@ -461,7 +457,7 @@ impl recyclable::Recyclable for CachedExpressions {
 
 #[derive(Eq, Hash, PartialEq)]
 enum CachedConstant {
-    Literal(crate::Literal),
+    Literal(crate::proc::HashableLiteral),
     Composite {
         ty: LookupType,
         constituent_ids: Vec<Word>,
@@ -534,6 +530,42 @@ struct FunctionArgument {
     handle_id: Word,
 }
 
+/// Tracks the expressions for which the backend emits the following instructions:
+/// - OpConstantTrue
+/// - OpConstantFalse
+/// - OpConstant
+/// - OpConstantComposite
+/// - OpConstantNull
+struct ExpressionConstnessTracker {
+    inner: crate::arena::HandleSet<crate::Expression>,
+}
+
+impl ExpressionConstnessTracker {
+    fn from_arena(arena: &crate::Arena<crate::Expression>) -> Self {
+        let mut inner = crate::arena::HandleSet::for_arena(arena);
+        for (handle, expr) in arena.iter() {
+            let insert = match *expr {
+                crate::Expression::Literal(_)
+                | crate::Expression::ZeroValue(_)
+                | crate::Expression::Constant(_) => true,
+                crate::Expression::Compose { ref components, .. } => {
+                    components.iter().all(|&h| inner.contains(h))
+                }
+                crate::Expression::Splat { value, .. } => inner.contains(value),
+                _ => false,
+            };
+            if insert {
+                inner.insert(handle);
+            }
+        }
+        Self { inner }
+    }
+
+    fn is_const(&self, value: Handle<crate::Expression>) -> bool {
+        self.inner.contains(value)
+    }
+}
+
 /// General information needed to emit SPIR-V for Naga statements.
 struct BlockContext<'w> {
     /// The writer handling the module to which this code belongs.
@@ -559,7 +591,7 @@ struct BlockContext<'w> {
     temp_list: Vec<Word>,
 
     /// Tracks the constness of `Expression`s residing in `self.ir_function.expressions`
-    expression_constness: crate::proc::ExpressionConstnessTracker,
+    expression_constness: ExpressionConstnessTracker,
 }
 
 impl BlockContext<'_> {
@@ -582,6 +614,15 @@ impl BlockContext<'_> {
     fn get_scope_constant(&mut self, scope: Word) -> Word {
         self.writer
             .get_constant_scalar(crate::Literal::I32(scope as _))
+    }
+
+    fn get_pointer_id(
+        &mut self,
+        handle: Handle<crate::Type>,
+        class: spirv::StorageClass,
+    ) -> Result<Word, Error> {
+        self.writer
+            .get_pointer_id(&self.ir_module.types, handle, class)
     }
 }
 
@@ -621,9 +662,9 @@ pub struct Writer {
     lookup_function: crate::FastHashMap<Handle<crate::Function>, Word>,
     lookup_function_type: crate::FastHashMap<LookupFunctionType, Word>,
     /// Indexed by const-expression handle indexes
-    constant_ids: Vec<Word>,
+    constant_ids: HandleVec<crate::Expression, Word>,
     cached_constants: crate::FastHashMap<CachedConstant, Word>,
-    global_variables: Vec<GlobalVariable>,
+    global_variables: HandleVec<crate::GlobalVariable, GlobalVariable>,
     binding_map: BindingMap,
 
     // Cached expressions are only meaningful within a BlockContext, but we
@@ -641,16 +682,29 @@ bitflags::bitflags! {
     pub struct WriterFlags: u32 {
         /// Include debug labels for everything.
         const DEBUG = 0x1;
-        /// Flip Y coordinate of `BuiltIn::Position` output.
+
+        /// Flip Y coordinate of [`BuiltIn::Position`] output.
+        ///
+        /// [`BuiltIn::Position`]: crate::BuiltIn::Position
         const ADJUST_COORDINATE_SPACE = 0x2;
-        /// Emit `OpName` for input/output locations.
+
+        /// Emit [`OpName`][op] for input/output locations.
+        ///
         /// Contrary to spec, some drivers treat it as semantic, not allowing
         /// any conflicts.
+        ///
+        /// [op]: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html#OpName
         const LABEL_VARYINGS = 0x4;
-        /// Emit `PointSize` output builtin to vertex shaders, which is
+
+        /// Emit [`PointSize`] output builtin to vertex shaders, which is
         /// required for drawing with `PointList` topology.
+        ///
+        /// [`PointSize`]: crate::BuiltIn::PointSize
         const FORCE_POINT_SIZE = 0x8;
-        /// Clamp `BuiltIn::FragDepth` output between 0 and 1.
+
+        /// Clamp [`BuiltIn::FragDepth`] output between 0 and 1.
+        ///
+        /// [`BuiltIn::FragDepth`]: crate::BuiltIn::FragDepth
         const CLAMP_FRAG_DEPTH = 0x10;
     }
 }
@@ -715,7 +769,7 @@ impl<'a> Default for Options<'a> {
             flags,
             binding_map: BindingMap::default(),
             capabilities: None,
-            bounds_check_policies: crate::proc::BoundsCheckPolicies::default(),
+            bounds_check_policies: BoundsCheckPolicies::default(),
             zero_initialize_workgroup_memory: ZeroInitializeWorkgroupMemoryMode::Polyfill,
             debug_info: None,
         }
@@ -723,7 +777,7 @@ impl<'a> Default for Options<'a> {
 }
 
 // A subset of options meant to be changed per pipeline.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 #[cfg_attr(feature = "serialize", derive(serde::Serialize))]
 #[cfg_attr(feature = "deserialize", derive(serde::Deserialize))]
 pub struct PipelineOptions {

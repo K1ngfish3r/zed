@@ -1,4 +1,5 @@
 use crate::front::wgsl::parse::number::Number;
+use crate::front::wgsl::Scalar;
 use crate::{Arena, FastIndexSet, Handle, Span};
 use std::hash::Hash;
 
@@ -81,6 +82,7 @@ pub enum GlobalDeclKind<'a> {
     Fn(Function<'a>),
     Var(GlobalVariable<'a>),
     Const(Const<'a>),
+    Override(Override<'a>),
     Struct(Struct<'a>),
     Type(TypeAlias<'a>),
 }
@@ -199,6 +201,14 @@ pub struct Const<'a> {
     pub init: Handle<Expression<'a>>,
 }
 
+#[derive(Debug)]
+pub struct Override<'a> {
+    pub name: Ident<'a>,
+    pub id: Option<Handle<Expression<'a>>>,
+    pub ty: Option<Handle<Type<'a>>>,
+    pub init: Option<Handle<Expression<'a>>>,
+}
+
 /// The size of an [`Array`] or [`BindingArray`].
 ///
 /// [`Array`]: Type::Array
@@ -212,24 +222,17 @@ pub enum ArraySize<'a> {
 
 #[derive(Debug)]
 pub enum Type<'a> {
-    Scalar {
-        kind: crate::ScalarKind,
-        width: crate::Bytes,
-    },
+    Scalar(Scalar),
     Vector {
         size: crate::VectorSize,
-        kind: crate::ScalarKind,
-        width: crate::Bytes,
+        scalar: Scalar,
     },
     Matrix {
         columns: crate::VectorSize,
         rows: crate::VectorSize,
         width: crate::Bytes,
     },
-    Atomic {
-        kind: crate::ScalarKind,
-        width: crate::Bytes,
-    },
+    Atomic(Scalar),
     Pointer {
         base: Handle<Type<'a>>,
         space: crate::AddressSpace,
@@ -344,10 +347,7 @@ pub struct SwitchCase<'a> {
 #[derive(Debug)]
 pub enum ConstructorType<'a> {
     /// A scalar type or conversion: `f32(1)`.
-    Scalar {
-        kind: crate::ScalarKind,
-        width: crate::Bytes,
-    },
+    Scalar(Scalar),
 
     /// A vector construction whose component type is inferred from the
     /// argument: `vec3(1.0)`.
@@ -357,8 +357,7 @@ pub enum ConstructorType<'a> {
     /// `vec3<f32>(1.0)`.
     Vector {
         size: crate::VectorSize,
-        kind: crate::ScalarKind,
-        width: crate::Bytes,
+        scalar: Scalar,
     },
 
     /// A matrix construction whose component type is inferred from the

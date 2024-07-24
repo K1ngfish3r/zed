@@ -10,24 +10,37 @@ impl crate::ScalarKind {
             Self::Float => "asfloat",
             Self::Sint => "asint",
             Self::Uint => "asuint",
-            Self::Bool => unreachable!(),
+            Self::Bool | Self::AbstractInt | Self::AbstractFloat => unreachable!(),
         }
     }
+}
 
+impl crate::Scalar {
     /// Helper function that returns scalar related strings
     ///
     /// <https://docs.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-scalar>
-    pub(super) const fn to_hlsl_str(self, width: crate::Bytes) -> Result<&'static str, Error> {
-        match self {
-            Self::Sint => Ok("int"),
-            Self::Uint => Ok("uint"),
-            Self::Float => match width {
+    pub(super) const fn to_hlsl_str(self) -> Result<&'static str, Error> {
+        match self.kind {
+            crate::ScalarKind::Sint => match self.width {
+                4 => Ok("int"),
+                8 => Ok("int64_t"),
+                _ => Err(Error::UnsupportedScalar(self)),
+            },
+            crate::ScalarKind::Uint => match self.width {
+                4 => Ok("uint"),
+                8 => Ok("uint64_t"),
+                _ => Err(Error::UnsupportedScalar(self)),
+            },
+            crate::ScalarKind::Float => match self.width {
                 2 => Ok("half"),
                 4 => Ok("float"),
                 8 => Ok("double"),
-                _ => Err(Error::UnsupportedScalar(self, width)),
+                _ => Err(Error::UnsupportedScalar(self)),
             },
-            Self::Bool => Ok("bool"),
+            crate::ScalarKind::Bool => Ok("bool"),
+            crate::ScalarKind::AbstractInt | crate::ScalarKind::AbstractFloat => {
+                Err(Error::UnsupportedScalar(self))
+            }
         }
     }
 }
@@ -45,10 +58,10 @@ impl crate::TypeInner {
             Self::Matrix {
                 columns,
                 rows,
-                width,
+                scalar,
             } => {
-                let stride = Alignment::from(rows) * width as u32;
-                let last_row_size = rows as u32 * width as u32;
+                let stride = Alignment::from(rows) * scalar.width as u32;
+                let last_row_size = rows as u32 * scalar.width as u32;
                 ((columns as u32 - 1) * stride) + last_row_size
             }
             Self::Array { base, size, stride } => {
@@ -71,19 +84,19 @@ impl crate::TypeInner {
         names: &'a crate::FastHashMap<crate::proc::NameKey, String>,
     ) -> Result<Cow<'a, str>, Error> {
         Ok(match gctx.types[base].inner {
-            crate::TypeInner::Scalar { kind, width } => Cow::Borrowed(kind.to_hlsl_str(width)?),
-            crate::TypeInner::Vector { size, kind, width } => Cow::Owned(format!(
+            crate::TypeInner::Scalar(scalar) => Cow::Borrowed(scalar.to_hlsl_str()?),
+            crate::TypeInner::Vector { size, scalar } => Cow::Owned(format!(
                 "{}{}",
-                kind.to_hlsl_str(width)?,
+                scalar.to_hlsl_str()?,
                 crate::back::vector_size_str(size)
             )),
             crate::TypeInner::Matrix {
                 columns,
                 rows,
-                width,
+                scalar,
             } => Cow::Owned(format!(
                 "{}{}x{}",
-                crate::ScalarKind::Float.to_hlsl_str(width)?,
+                scalar.to_hlsl_str()?,
                 crate::back::vector_size_str(columns),
                 crate::back::vector_size_str(rows),
             )),
@@ -166,6 +179,11 @@ impl crate::BuiltIn {
             // to this field will get replaced with references to `SPECIAL_CBUF_VAR`
             // in `Writer::write_expr`.
             Self::NumWorkGroups => "SV_GroupID",
+            // These builtins map to functions
+            Self::SubgroupSize
+            | Self::SubgroupInvocationId
+            | Self::NumSubgroups
+            | Self::SubgroupId => unreachable!(),
             Self::BaseInstance | Self::BaseVertex | Self::WorkGroupSize => {
                 return Err(Error::Unimplemented(format!("builtin {self:?}")))
             }

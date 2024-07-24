@@ -1,5 +1,4 @@
 use super::error::Error;
-use num_traits::cast::FromPrimitive;
 use std::convert::TryInto;
 
 pub(super) const fn map_binary_operator(word: spirv::Op) -> Result<crate::BinaryOperator, Error> {
@@ -154,6 +153,11 @@ pub(super) fn map_builtin(word: spirv::Word, invariant: bool) -> Result<crate::B
         Some(Bi::WorkgroupId) => crate::BuiltIn::WorkGroupId,
         Some(Bi::WorkgroupSize) => crate::BuiltIn::WorkGroupSize,
         Some(Bi::NumWorkgroups) => crate::BuiltIn::NumWorkGroups,
+        // subgroup
+        Some(Bi::NumSubgroups) => crate::BuiltIn::NumSubgroups,
+        Some(Bi::SubgroupId) => crate::BuiltIn::SubgroupId,
+        Some(Bi::SubgroupSize) => crate::BuiltIn::SubgroupSize,
+        Some(Bi::SubgroupLocalInvocationId) => crate::BuiltIn::SubgroupInvocationId,
         _ => return Err(Error::UnsupportedBuiltIn(word)),
     })
 }

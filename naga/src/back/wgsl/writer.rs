@@ -1,6 +1,6 @@
 use super::Error;
 use crate::{
-    back,
+    back::{self, Baked},
     proc::{self, NameKey},
     valid, Handle, Module, ShaderStage, TypeInner,
 };
@@ -106,10 +106,16 @@ impl<W: Write> Writer<W> {
     }
 
     pub fn write(&mut self, module: &Module, info: &valid::ModuleInfo) -> BackendResult {
+        if !module.overrides.is_empty() {
+            return Err(Error::Unimplemented(
+                "Pipeline constants are not yet supported for this back-end".to_string(),
+            ));
+        }
+
         self.reset(module);
 
         // Save all ep result types
-        for (_, ep) in module.entry_points.iter().enumerate() {
+        for ep in &module.entry_points {
             if let Some(ref result) = ep.function.result {
                 self.ep_results.push((ep.stage, result.ty));
             }
@@ -426,11 +432,11 @@ impl<W: Write> Writer<W> {
     /// Adds no trailing or leading whitespace
     fn write_value_type(&mut self, module: &Module, inner: &TypeInner) -> BackendResult {
         match *inner {
-            TypeInner::Vector { size, kind, width } => write!(
+            TypeInner::Vector { size, scalar } => write!(
                 self.out,
                 "vec{}<{}>",
                 back::vector_size_str(size),
-                scalar_kind_str(kind, width),
+                scalar_kind_str(scalar),
             )?,
             TypeInner::Sampler { comparison: false } => {
                 write!(self.out, "sampler")?;
@@ -452,7 +458,7 @@ impl<W: Write> Writer<W> {
                     Ic::Sampled { kind, multi } => (
                         "",
                         if multi { "multisampled_" } else { "" },
-                        scalar_kind_str(kind, 4),
+                        scalar_kind_str(crate::Scalar { kind, width: 4 }),
                         "",
                     ),
                     Ic::Depth { multi } => {
@@ -481,11 +487,11 @@ impl<W: Write> Writer<W> {
                     write!(self.out, "<{format_str}{storage_str}>")?;
                 }
             }
-            TypeInner::Scalar { kind, width } => {
-                write!(self.out, "{}", scalar_kind_str(kind, width))?;
+            TypeInner::Scalar(scalar) => {
+                write!(self.out, "{}", scalar_kind_str(scalar))?;
             }
-            TypeInner::Atomic { kind, width } => {
-                write!(self.out, "atomic<{}>", scalar_kind_str(kind, width))?;
+            TypeInner::Atomic(scalar) => {
+                write!(self.out, "atomic<{}>", scalar_kind_str(scalar))?;
             }
             TypeInner::Array {
                 base,
@@ -524,14 +530,14 @@ impl<W: Write> Writer<W> {
             TypeInner::Matrix {
                 columns,
                 rows,
-                width: _,
+                scalar,
             } => {
                 write!(
                     self.out,
-                    //TODO: Can matrix be other than f32?
-                    "mat{}x{}<f32>",
+                    "mat{}x{}<{}>",
                     back::vector_size_str(columns),
                     back::vector_size_str(rows),
+                    scalar_kind_str(scalar)
                 )?;
             }
             TypeInner::Pointer { base, space } => {
@@ -552,13 +558,12 @@ impl<W: Write> Writer<W> {
             }
             TypeInner::ValuePointer {
                 size: None,
-                kind,
-                width,
+                scalar,
                 space,
             } => {
                 let (address, maybe_access) = address_space_str(space);
                 if let Some(space) = address {
-                    write!(self.out, "ptr<{}, {}", space, scalar_kind_str(kind, width))?;
+                    write!(self.out, "ptr<{}, {}", space, scalar_kind_str(scalar))?;
                     if let Some(access) = maybe_access {
                         write!(self.out, ", {access}")?;
                     }
@@ -571,8 +576,7 @@ impl<W: Write> Writer<W> {
             }
             TypeInner::ValuePointer {
                 size: Some(size),
-                kind,
-                width,
+                scalar,
                 space,
             } => {
                 let (address, maybe_access) = address_space_str(space);
@@ -582,7 +586,7 @@ impl<W: Write> Writer<W> {
                         "ptr<{}, vec{}<{}>",
                         space,
                         back::vector_size_str(size),
-                        scalar_kind_str(kind, width)
+                        scalar_kind_str(scalar)
                     )?;
                     if let Some(access) = maybe_access {
                         write!(self.out, ", {access}")?;
@@ -595,6 +599,7 @@ impl<W: Write> Writer<W> {
                 }
                 write!(self.out, ">")?;
             }
+            TypeInner::AccelerationStructure => write!(self.out, "acceleration_structure")?,
             _ => {
                 return Err(Error::Unimplemented(format!("write_value_type {inner:?}")));
             }
@@ -636,7 +641,7 @@ impl<W: Write> Writer<W> {
                             _ => false,
                         };
                         if min_ref_count <= info.ref_count || required_baking_expr {
-                            Some(format!("{}{}", back::BAKE_PREFIX, handle.index()))
+                            Some(Baked(handle).to_string())
                         } else {
                             None
                         }
@@ -728,7 +733,7 @@ impl<W: Write> Writer<W> {
             } => {
                 write!(self.out, "{level}")?;
                 if let Some(expr) = result {
-                    let name = format!("{}{}", back::BAKE_PREFIX, expr.index());
+                    let name = Baked(expr).to_string();
                     self.start_named_expr(module, expr, func_ctx, &name)?;
                     self.named_expressions.insert(expr, name);
                 }
@@ -749,9 +754,11 @@ impl<W: Write> Writer<W> {
                 result,
             } => {
                 write!(self.out, "{level}")?;
-                let res_name = format!("{}{}", back::BAKE_PREFIX, result.index());
-                self.start_named_expr(module, result, func_ctx, &res_name)?;
-                self.named_expressions.insert(result, res_name);
+                if let Some(result) = result {
+                    let res_name = Baked(result).to_string();
+                    self.start_named_expr(module, result, func_ctx, &res_name)?;
+                    self.named_expressions.insert(result, res_name);
+                }
 
                 let fun_str = fun.to_wgsl();
                 write!(self.out, "atomic{fun_str}(")?;
@@ -767,7 +774,7 @@ impl<W: Write> Writer<W> {
             Statement::WorkGroupUniformLoad { pointer, result } => {
                 write!(self.out, "{level}")?;
                 // TODO: Obey named expressions here.
-                let res_name = format!("{}{}", back::BAKE_PREFIX, result.index());
+                let res_name = Baked(result).to_string();
                 self.start_named_expr(module, result, func_ctx, &res_name)?;
                 self.named_expressions.insert(result, res_name);
                 write!(self.out, "workgroupUniformLoad(")?;
@@ -919,8 +926,124 @@ impl<W: Write> Writer<W> {
                 if barrier.contains(crate::Barrier::WORK_GROUP) {
                     writeln!(self.out, "{level}workgroupBarrier();")?;
                 }
+
+                if barrier.contains(crate::Barrier::SUB_GROUP) {
+                    writeln!(self.out, "{level}subgroupBarrier();")?;
+                }
             }
             Statement::RayQuery { .. } => unreachable!(),
+            Statement::SubgroupBallot { result, predicate } => {
+                write!(self.out, "{level}")?;
+                let res_name = Baked(result).to_string();
+                self.start_named_expr(module, result, func_ctx, &res_name)?;
+                self.named_expressions.insert(result, res_name);
+
+                write!(self.out, "subgroupBallot(")?;
+                if let Some(predicate) = predicate {
+                    self.write_expr(module, predicate, func_ctx)?;
+                }
+                writeln!(self.out, ");")?;
+            }
+            Statement::SubgroupCollectiveOperation {
+                op,
+                collective_op,
+                argument,
+                result,
+            } => {
+                write!(self.out, "{level}")?;
+                let res_name = Baked(result).to_string();
+                self.start_named_expr(module, result, func_ctx, &res_name)?;
+                self.named_expressions.insert(result, res_name);
+
+                match (collective_op, op) {
+                    (crate::CollectiveOperation::Reduce, crate::SubgroupOperation::All) => {
+                        write!(self.out, "subgroupAll(")?
+                    }
+                    (crate::CollectiveOperation::Reduce, crate::SubgroupOperation::Any) => {
+                        write!(self.out, "subgroupAny(")?
+                    }
+                    (crate::CollectiveOperation::Reduce, crate::SubgroupOperation::Add) => {
+                        write!(self.out, "subgroupAdd(")?
+                    }
+                    (crate::CollectiveOperation::Reduce, crate::SubgroupOperation::Mul) => {
+                        write!(self.out, "subgroupMul(")?
+                    }
+                    (crate::CollectiveOperation::Reduce, crate::SubgroupOperation::Max) => {
+                        write!(self.out, "subgroupMax(")?
+                    }
+                    (crate::CollectiveOperation::Reduce, crate::SubgroupOperation::Min) => {
+                        write!(self.out, "subgroupMin(")?
+                    }
+                    (crate::CollectiveOperation::Reduce, crate::SubgroupOperation::And) => {
+                        write!(self.out, "subgroupAnd(")?
+                    }
+                    (crate::CollectiveOperation::Reduce, crate::SubgroupOperation::Or) => {
+                        write!(self.out, "subgroupOr(")?
+                    }
+                    (crate::CollectiveOperation::Reduce, crate::SubgroupOperation::Xor) => {
+                        write!(self.out, "subgroupXor(")?
+                    }
+                    (crate::CollectiveOperation::ExclusiveScan, crate::SubgroupOperation::Add) => {
+                        write!(self.out, "subgroupExclusiveAdd(")?
+                    }
+                    (crate::CollectiveOperation::ExclusiveScan, crate::SubgroupOperation::Mul) => {
+                        write!(self.out, "subgroupExclusiveMul(")?
+                    }
+                    (crate::CollectiveOperation::InclusiveScan, crate::SubgroupOperation::Add) => {
+                        write!(self.out, "subgroupInclusiveAdd(")?
+                    }
+                    (crate::CollectiveOperation::InclusiveScan, crate::SubgroupOperation::Mul) => {
+                        write!(self.out, "subgroupInclusiveMul(")?
+                    }
+                    _ => unimplemented!(),
+                }
+                self.write_expr(module, argument, func_ctx)?;
+                writeln!(self.out, ");")?;
+            }
+            Statement::SubgroupGather {
+                mode,
+                argument,
+                result,
+            } => {
+                write!(self.out, "{level}")?;
+                let res_name = Baked(result).to_string();
+                self.start_named_expr(module, result, func_ctx, &res_name)?;
+                self.named_expressions.insert(result, res_name);
+
+                match mode {
+                    crate::GatherMode::BroadcastFirst => {
+                        write!(self.out, "subgroupBroadcastFirst(")?;
+                    }
+                    crate::GatherMode::Broadcast(_) => {
+                        write!(self.out, "subgroupBroadcast(")?;
+                    }
+                    crate::GatherMode::Shuffle(_) => {
+                        write!(self.out, "subgroupShuffle(")?;
+                    }
+                    crate::GatherMode::ShuffleDown(_) => {
+                        write!(self.out, "subgroupShuffleDown(")?;
+                    }
+                    crate::GatherMode::ShuffleUp(_) => {
+                        write!(self.out, "subgroupShuffleUp(")?;
+                    }
+                    crate::GatherMode::ShuffleXor(_) => {
+                        write!(self.out, "subgroupShuffleXor(")?;
+                    }
+                }
+                self.write_expr(module, argument, func_ctx)?;
+                match mode {
+                    crate::GatherMode::BroadcastFirst => {}
+                    crate::GatherMode::Broadcast(index)
+                    | crate::GatherMode::Shuffle(index)
+                    | crate::GatherMode::ShuffleDown(index)
+                    | crate::GatherMode::ShuffleUp(index)
+                    | crate::GatherMode::ShuffleXor(index) => {
+                        write!(self.out, ", ")?;
+                        self.write_expr(module, index, func_ctx)?;
+                    }
+                }
+                writeln!(self.out, ");")?;
+            }
         }
 
         Ok(())
@@ -975,7 +1098,7 @@ impl<W: Write> Writer<W> {
             Ex::Access { base, .. } | Ex::AccessIndex { base, .. } => {
                 let base_ty = func_ctx.resolve_type(base, &module.types);
                 match *base_ty {
-                    crate::TypeInner::Pointer { .. } | crate::TypeInner::ValuePointer { .. } => {
+                    TypeInner::Pointer { .. } | TypeInner::ValuePointer { .. } => {
                         Indirection::Reference
                     }
                     _ => Indirection::Ordinary,
@@ -1071,7 +1194,7 @@ impl<W: Write> Writer<W> {
         self.write_possibly_const_expression(
             module,
             expr,
-            &module.const_expressions,
+            &module.global_expressions,
             |writer, expr| writer.write_const_expression(module, expr),
         )
     }
@@ -1089,19 +1212,38 @@ impl<W: Write> Writer<W> {
         use crate::Expression;
 
         match expressions[expr] {
-            Expression::Literal(literal) => {
-                match literal {
-                    // Floats are written using `Debug` instead of `Display` because it always appends the
-                    // decimal part even it's zero
-                    crate::Literal::F64(_) => {
-                        return Err(Error::Custom("unsupported f64 literal".to_string()));
+            Expression::Literal(literal) => match literal {
+                crate::Literal::F32(value) => write!(self.out, "{}f", value)?,
+                crate::Literal::U32(value) => write!(self.out, "{}u", value)?,
+                crate::Literal::I32(value) => {
+                    // `-2147483648i` is not valid WGSL. The most negative `i32`
+                    // value can only be expressed in WGSL using AbstractInt and
+                    // a unary negation operator.
+                    if value == i32::MIN {
+                        write!(self.out, "i32({})", value)?;
+                    } else {
+                        write!(self.out, "{}i", value)?;
                     }
-                    crate::Literal::F32(value) => write!(self.out, "{:?}", value)?,
-                    crate::Literal::U32(value) => write!(self.out, "{}u", value)?,
-                    crate::Literal::I32(value) => write!(self.out, "{}", value)?,
-                    crate::Literal::Bool(value) => write!(self.out, "{}", value)?,
                 }
-            }
+                crate::Literal::Bool(value) => write!(self.out, "{}", value)?,
+                crate::Literal::F64(value) => write!(self.out, "{:?}lf", value)?,
+                crate::Literal::I64(value) => {
+                    // `-9223372036854775808li` is not valid WGSL. The most negative `i64`
+                    // value can only be expressed in WGSL using AbstractInt and
+                    // a unary negation operator.
+                    if value == i64::MIN {
+                        write!(self.out, "i64({})", value)?;
+                    } else {
+                        write!(self.out, "{}li", value)?;
+                    }
+                }
+                crate::Literal::U64(value) => write!(self.out, "{:?}lu", value)?,
+                crate::Literal::AbstractInt(_) | crate::Literal::AbstractFloat(_) => {
+                    return Err(Error::Custom(
+                        "Abstract types should not appear in IR presented to backends".into(),
+                    ));
+                }
+            },
             Expression::Constant(handle) => {
                 let constant = &module.constants[handle];
                 if constant.name.is_some() {
@@ -1181,6 +1323,7 @@ impl<W: Write> Writer<W> {
                     |writer, expr| writer.write_expr(module, expr, func_ctx),
                 )?;
             }
+            Expression::Override(_) => unreachable!(),
             Expression::FunctionArgument(pos) => {
                 let name_key = func_ctx.argument_key(pos);
                 let name = &self.names[&name_key];
@@ -1411,10 +1554,13 @@ impl<W: Write> Writer<W> {
                     TypeInner::Matrix {
                         columns,
                         rows,
-                        width,
-                        ..
+                        scalar,
                     } => {
-                        let scalar_kind_str = scalar_kind_str(kind, convert.unwrap_or(width));
+                        let scalar = crate::Scalar {
+                            kind,
+                            width: convert.unwrap_or(scalar.width),
+                        };
+                        let scalar_kind_str = scalar_kind_str(scalar);
                         write!(
                             self.out,
                             "mat{}x{}<{}>",
@@ -1423,17 +1569,28 @@ impl<W: Write> Writer<W> {
                             scalar_kind_str
                         )?;
                     }
-                    TypeInner::Vector { size, width, .. } => {
+                    TypeInner::Vector {
+                        size,
+                        scalar: crate::Scalar { width, .. },
+                    } => {
+                        let scalar = crate::Scalar {
+                            kind,
+                            width: convert.unwrap_or(width),
+                        };
                         let vector_size_str = back::vector_size_str(size);
-                        let scalar_kind_str = scalar_kind_str(kind, convert.unwrap_or(width));
+                        let scalar_kind_str = scalar_kind_str(scalar);
                         if convert.is_some() {
                             write!(self.out, "vec{vector_size_str}<{scalar_kind_str}>")?;
                         } else {
                             write!(self.out, "bitcast<vec{vector_size_str}<{scalar_kind_str}>>")?;
                         }
                     }
-                    TypeInner::Scalar { width, .. } => {
-                        let scalar_kind_str = scalar_kind_str(kind, convert.unwrap_or(width));
+                    TypeInner::Scalar(crate::Scalar { width, .. }) => {
+                        let scalar = crate::Scalar {
+                            kind,
+                            width: convert.unwrap_or(width),
+                        };
+                        let scalar_kind_str = scalar_kind_str(scalar);
                         if convert.is_some() {
                             write!(self.out, "{scalar_kind_str}")?
                         } else {
@@ -1561,12 +1718,16 @@ impl<W: Write> Writer<W> {
                     Mf::Pack2x16snorm => Function::Regular("pack2x16snorm"),
                     Mf::Pack2x16unorm => Function::Regular("pack2x16unorm"),
                     Mf::Pack2x16float => Function::Regular("pack2x16float"),
+                    Mf::Pack4xI8 => Function::Regular("pack4xI8"),
+                    Mf::Pack4xU8 => Function::Regular("pack4xU8"),
                     // data unpacking
                     Mf::Unpack4x8snorm => Function::Regular("unpack4x8snorm"),
                     Mf::Unpack4x8unorm => Function::Regular("unpack4x8unorm"),
                     Mf::Unpack2x16snorm => Function::Regular("unpack2x16snorm"),
                     Mf::Unpack2x16unorm => Function::Regular("unpack2x16unorm"),
                     Mf::Unpack2x16float => Function::Regular("unpack2x16float"),
+                    Mf::Unpack4xI8 => Function::Regular("unpack4xI8"),
+                    Mf::Unpack4xU8 => Function::Regular("unpack4xU8"),
                     Mf::Inverse | Mf::Outer => {
                         return Err(Error::UnsupportedMathFunction(fun));
                     }
@@ -1659,6 +1820,8 @@ impl<W: Write> Writer<W> {
             Expression::CallResult(_)
             | Expression::AtomicResult { .. }
             | Expression::RayQueryProceedResult
+            | Expression::SubgroupBallotResult
+            | Expression::SubgroupOperationResult { .. }
             | Expression::WorkGroupUniformLoadResult { .. } => {}
         }
 
@@ -1760,6 +1923,10 @@ fn builtin_str(built_in: crate::BuiltIn) -> Result<&'static str, Error> {
         Bi::SampleMask => "sample_mask",
         Bi::PrimitiveIndex => "primitive_index",
         Bi::ViewIndex => "view_index",
+        Bi::NumSubgroups => "num_subgroups",
+        Bi::SubgroupId => "subgroup_id",
+        Bi::SubgroupSize => "subgroup_size",
+        Bi::SubgroupInvocationId => "subgroup_invocation_id",
         Bi::BaseInstance
         | Bi::BaseVertex
         | Bi::ClipDistance
@@ -1783,15 +1950,39 @@ const fn image_dimension_str(dim: crate::ImageDimension) -> &'static str {
     }
 }
 
-const fn scalar_kind_str(kind: crate::ScalarKind, width: u8) -> &'static str {
+const fn scalar_kind_str(scalar: crate::Scalar) -> &'static str {
+    use crate::Scalar;
     use crate::ScalarKind as Sk;
 
-    match (kind, width) {
-        (Sk::Float, 8) => "f64",
-        (Sk::Float, 4) => "f32",
-        (Sk::Sint, 4) => "i32",
-        (Sk::Uint, 4) => "u32",
-        (Sk::Bool, 1) => "bool",
+    match scalar {
+        Scalar {
+            kind: Sk::Float,
+            width: 8,
+        } => "f64",
+        Scalar {
+            kind: Sk::Float,
+            width: 4,
+        } => "f32",
+        Scalar {
+            kind: Sk::Sint,
+            width: 4,
+        } => "i32",
+        Scalar {
+            kind: Sk::Uint,
+            width: 4,
+        } => "u32",
+        Scalar {
+            kind: Sk::Sint,
+            width: 8,
+        } => "i64",
+        Scalar {
+            kind: Sk::Uint,
+            width: 8,
+        } => "u64",
+        Scalar {
+            kind: Sk::Bool,
+            width: 1,
+        } => "bool",
         _ => unreachable!(),
     }
 }

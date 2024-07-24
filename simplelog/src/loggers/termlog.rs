@@ -5,30 +5,17 @@ use log::{
 };
 use std::io::{Error, Write};
 use std::sync::Mutex;
-use termcolor;
-use termcolor::{StandardStream, ColorChoice, WriteColor, ColorSpec};
+use termcolor::{BufferedStandardStream, ColorChoice};
+#[cfg(not(feature = "ansi_term"))]
+use termcolor::{ColorSpec, WriteColor};
 
 use super::logging::*;
 
-use crate::{Config, SharedLogger};
-
-enum StdTerminal {
-    Stderr(Box<dyn WriteColor + Send>),
-    Stdout(Box<dyn WriteColor + Send>),
-}
-
-impl StdTerminal {
-    fn flush(&mut self) -> Result<(), Error> {
-        match self {
-            StdTerminal::Stderr(term) => term.flush(),
-            StdTerminal::Stdout(term) => term.flush(),
-        }
-    }
-}
+use crate::{Config, SharedLogger, ThreadLogMode};
 
 struct OutputStreams {
-    err: StdTerminal,
-    out: StdTerminal,
+    err: BufferedStandardStream,
+    out: BufferedStandardStream,
 }
 
 /// Specifies which streams should be used when logging
@@ -68,16 +55,22 @@ impl TermLogger {
     /// # extern crate simplelog;
     /// # use simplelog::*;
     /// # fn main() {
-    ///     TermLogger::init(LevelFilter::Info, Config::default(), TerminalMode::Mixed);
+    ///     TermLogger::init(
+    ///         LevelFilter::Info,
+    ///         Config::default(),
+    ///         TerminalMode::Mixed,
+    ///         ColorChoice::Auto
+    ///     );
     /// # }
     /// ```
     pub fn init(
         log_level: LevelFilter,
         config: Config,
         mode: TerminalMode,
+        color_choice: ColorChoice,
     ) -> Result<(), SetLoggerError> {
-        let logger = TermLogger::new(log_level, config, mode);
-        set_max_level(log_level.clone());
+        let logger = TermLogger::new(log_level, config, mode, color_choice);
+        set_max_level(log_level);
         set_boxed_logger(logger)?;
         Ok(())
     }
@@ -96,33 +89,38 @@ impl TermLogger {
     /// # extern crate simplelog;
     /// # use simplelog::*;
     /// # fn main() {
-    /// let term_logger = TermLogger::new(LevelFilter::Info, Config::default(), TerminalMode::Mixed);
+    /// let term_logger = TermLogger::new(
+    ///     LevelFilter::Info,
+    ///     Config::default(),
+    ///     TerminalMode::Mixed,
+    ///     ColorChoice::Auto
+    /// );
     /// # }
     /// ```
     pub fn new(
         log_level: LevelFilter,
         config: Config,
         mode: TerminalMode,
+        color_choice: ColorChoice,
     ) -> Box<TermLogger> {
         let streams = match mode {
             TerminalMode::Stdout => OutputStreams {
-                err: StdTerminal::Stdout(Box::new(StandardStream::stdout(ColorChoice::Always))),
-                out: StdTerminal::Stdout(Box::new(StandardStream::stdout(ColorChoice::Always)))
+                err: BufferedStandardStream::stdout(color_choice),
+                out: BufferedStandardStream::stdout(color_choice),
             },
             TerminalMode::Stderr => OutputStreams {
-                err: StdTerminal::Stderr(Box::new(StandardStream::stderr(ColorChoice::Always))),
-                out: StdTerminal::Stderr(Box::new(StandardStream::stderr(ColorChoice::Always)))
+                err: BufferedStandardStream::stderr(color_choice),
+                out: BufferedStandardStream::stderr(color_choice),
             },
             TerminalMode::Mixed => OutputStreams {
-                err: StdTerminal::Stderr(Box::new(StandardStream::stderr(ColorChoice::Always))),
-                out: StdTerminal::Stdout(Box::new(StandardStream::stdout(ColorChoice::Always)))
+                err: BufferedStandardStream::stderr(color_choice),
+                out: BufferedStandardStream::stdout(color_choice),
             },
         };
 
-
         Box::new(TermLogger {
             level: log_level,
-            config: config,
+            config,
             streams: Mutex::new(streams),
         })
     }
@@ -130,33 +128,56 @@ impl TermLogger {
     fn try_log_term(
         &self,
         record: &Record<'_>,
-        term_lock: &mut Box<dyn WriteColor + Send>,
+        term_lock: &mut BufferedStandardStream,
     ) -> Result<(), Error> {
+        #[cfg(not(feature = "ansi_term"))]
         let color = self.config.level_color[record.level() as usize];
 
         if self.config.time <= record.level() && self.config.time != LevelFilter::Off {
-            write_time(&mut *term_lock, &self.config)?;
+            write_time(term_lock, &self.config)?;
         }
 
         if self.config.level <= record.level() && self.config.level != LevelFilter::Off {
-            term_lock.set_color(ColorSpec::new().set_fg(Some(color)))?;
-            write_level(record, &mut *term_lock, &self.config)?;
-            term_lock.reset()?;
+            #[cfg(not(feature = "ansi_term"))]
+            if !self.config.write_log_enable_colors {
+                term_lock.set_color(ColorSpec::new().set_fg(color))?;
+            }
+
+            write_level(record, term_lock, &self.config)?;
+
+            #[cfg(not(feature = "ansi_term"))]
+            if !self.config.write_log_enable_colors {
+                term_lock.reset()?;
+            }
         }
 
         if self.config.thread <= record.level() && self.config.thread != LevelFilter::Off {
-            write_thread_id(&mut *term_lock, &self.config)?;
+            match self.config.thread_log_mode {
+                ThreadLogMode::IDs => {
+                    write_thread_id(term_lock, &self.config)?;
+                }
+                ThreadLogMode::Names | ThreadLogMode::Both => {
+                    write_thread_name(term_lock, &self.config)?;
+                }
+            }
         }
 
         if self.config.target <= record.level() && self.config.target != LevelFilter::Off {
-            write_target(record, &mut *term_lock)?;
+            write_target(record, term_lock, &self.config)?;
         }
 
         if self.config.location <= record.level() && self.config.location != LevelFilter::Off {
-            write_location(record, &mut *term_lock)?;
+            write_location(record, term_lock)?;
         }
 
-        write_args(record, &mut *term_lock)
+        write_args(record, term_lock)?;
+
+        // The log crate holds the logger as a `static mut`, which isn't dropped
+        // at program exit: https://doc.rust-lang.org/reference/items/static-items.html
+        // Sadly, this means we can't rely on the BufferedStandardStreams flushing
+        // themselves on the way out, so to avoid the Case of the Missing 8k,
+        // flush each entry.
+        term_lock.flush()
     }
 
     fn try_log(&self, record: &Record<'_>) -> Result<(), Error> {
@@ -168,15 +189,9 @@ impl TermLogger {
             let mut streams = self.streams.lock().unwrap();
 
             if record.level() == Level::Error {
-                match streams.err {
-                    StdTerminal::Stderr(ref mut term) => self.try_log_term(record, term),
-                    StdTerminal::Stdout(ref mut term) => self.try_log_term(record, term),
-                }
+                self.try_log_term(record, &mut streams.err)
             } else {
-                match streams.out {
-                    StdTerminal::Stderr(ref mut term) => self.try_log_term(record, term),
-                    StdTerminal::Stdout(ref mut term) => self.try_log_term(record, term),
-                }
+                self.try_log_term(record, &mut streams.out)
             }
         } else {
             Ok(())

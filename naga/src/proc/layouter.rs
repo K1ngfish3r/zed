@@ -1,4 +1,4 @@
-use crate::arena::Handle;
+use crate::arena::{Handle, HandleVec};
 use std::{fmt::Display, num::NonZeroU32, ops};
 
 /// A newtype struct where its only valid values are powers of 2
@@ -108,17 +108,15 @@ impl TypeLayout {
 ///
 /// [WGSL §4.3.7, "Memory Layout"](https://gpuweb.github.io/gpuweb/wgsl/#memory-layouts)
 #[derive(Debug, Default)]
-#[cfg_attr(feature = "serialize", derive(serde::Serialize))]
-#[cfg_attr(feature = "deserialize", derive(serde::Deserialize))]
 pub struct Layouter {
-    /// Layouts for types in an arena, indexed by `Handle` index.
-    layouts: Vec<TypeLayout>,
+    /// Layouts for types in an arena.
+    layouts: HandleVec<crate::Type, TypeLayout>,
 }
 
 impl ops::Index<Handle<crate::Type>> for Layouter {
     type Output = TypeLayout;
     fn index(&self, handle: Handle<crate::Type>) -> &TypeLayout {
-        &self.layouts[handle.index()]
+        &self.layouts[handle]
     }
 }
 
@@ -171,17 +169,16 @@ impl Layouter {
         for (ty_handle, ty) in gctx.types.iter().skip(self.layouts.len()) {
             let size = ty.inner.size(gctx);
             let layout = match ty.inner {
-                Ti::Scalar { width, .. } | Ti::Atomic { width, .. } => {
-                    let alignment = Alignment::new(width as u32)
+                Ti::Scalar(scalar) | Ti::Atomic(scalar) => {
+                    let alignment = Alignment::new(scalar.width as u32)
                         .ok_or(LayoutErrorInner::NonPowerOfTwoWidth.with(ty_handle))?;
                     TypeLayout { size, alignment }
                 }
                 Ti::Vector {
                     size: vec_size,
-                    width,
-                    ..
+                    scalar,
                 } => {
-                    let alignment = Alignment::new(width as u32)
+                    let alignment = Alignment::new(scalar.width as u32)
                         .ok_or(LayoutErrorInner::NonPowerOfTwoWidth.with(ty_handle))?;
                     TypeLayout {
                         size,
@@ -191,9 +188,9 @@ impl Layouter {
                 Ti::Matrix {
                     columns: _,
                     rows,
-                    width,
+                    scalar,
                 } => {
-                    let alignment = Alignment::new(width as u32)
+                    let alignment = Alignment::new(scalar.width as u32)
                         .ok_or(LayoutErrorInner::NonPowerOfTwoWidth.with(ty_handle))?;
                     TypeLayout {
                         size,
@@ -244,7 +241,7 @@ impl Layouter {
                 },
             };
             debug_assert!(size <= layout.size);
-            self.layouts.push(layout);
+            self.layouts.insert(ty_handle, layout);
         }
 
         Ok(())

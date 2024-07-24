@@ -1,9 +1,11 @@
-use log::{Level, LevelFilter};
+#[cfg(feature = "termcolor")]
+use log::Level;
+use log::LevelFilter;
 
-pub use chrono::offset::{FixedOffset, Local, Offset, TimeZone, Utc};
+use std::borrow::Cow;
 #[cfg(feature = "termcolor")]
 use termcolor::Color;
-use std::borrow::Cow;
+pub use time::{format_description::FormatItem, macros::format_description, UtcOffset};
 
 #[derive(Debug, Clone, Copy)]
 /// Padding to be used for logging the level
@@ -27,6 +29,17 @@ pub enum ThreadPadding {
     Off,
 }
 
+#[derive(Debug, Clone, Copy)]
+/// Padding to be used for logging the thread id/name
+pub enum TargetPadding {
+    /// Add spaces on the left side, up to usize many
+    Left(usize),
+    /// Add spaces on the right side, up to usize many
+    Right(usize),
+    /// Do not pad the thread id/name
+    Off,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 /// Mode for logging the thread name or id or both.
 pub enum ThreadLogMode {
@@ -38,6 +51,13 @@ pub enum ThreadLogMode {
     Both,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) enum TimeFormat {
+    Rfc2822,
+    Rfc3339,
+    Custom(&'static [time::format_description::FormatItem<'static>]),
+}
+
 /// Configuration for the Loggers
 ///
 /// All loggers print the message in the following form:
@@ -47,7 +67,7 @@ pub enum ThreadLogMode {
 /// Pass this struct to your logger to change when these information shall
 /// be logged.
 ///
-/// Construct using `Default` or using `ConfigBuilder`
+/// Construct using [`Default`](Config::default) or using [`ConfigBuilder`]
 #[derive(Debug, Clone)]
 pub struct Config {
     pub(crate) time: LevelFilter,
@@ -57,14 +77,15 @@ pub struct Config {
     pub(crate) thread_log_mode: ThreadLogMode,
     pub(crate) thread_padding: ThreadPadding,
     pub(crate) target: LevelFilter,
+    pub(crate) target_padding: TargetPadding,
     pub(crate) location: LevelFilter,
-    pub(crate) time_format: Cow<'static, str>,
-    pub(crate) time_offset: FixedOffset,
-    pub(crate) time_local: bool,
+    pub(crate) time_format: TimeFormat,
+    pub(crate) time_offset: UtcOffset,
     pub(crate) filter_allow: Cow<'static, [Cow<'static, str>]>,
     pub(crate) filter_ignore: Cow<'static, [Cow<'static, str>]>,
     #[cfg(feature = "termcolor")]
-    pub(crate) level_color: [Color; 6],
+    pub(crate) level_color: [Option<Color>; 6],
+    pub(crate) write_log_enable_colors: bool,
 }
 
 /// Builder for the Logger Configurations (`Config`)
@@ -90,89 +111,134 @@ impl ConfigBuilder {
         ConfigBuilder(Config::default())
     }
 
-    /// Set at which level and below the level itself shall be logged (default is Error)
-    pub fn set_max_level<'a>(&'a mut self, level: LevelFilter) -> &'a mut ConfigBuilder {
+    /// Set at which level and above (more verbose) the level itself shall be logged (default is Error)
+    pub fn set_max_level(&mut self, level: LevelFilter) -> &mut ConfigBuilder {
         self.0.level = level;
         self
     }
 
-    /// Set at which level and below the current time shall be logged (default is Error)
-    pub fn set_time_level<'a>(&'a mut self, time: LevelFilter) -> &'a mut ConfigBuilder {
+    /// Set at which level and  above (more verbose) the current time shall be logged (default is Error)
+    pub fn set_time_level(&mut self, time: LevelFilter) -> &mut ConfigBuilder {
         self.0.time = time;
         self
     }
 
-    /// Set at which level and below the thread id shall be logged. (default is Debug)
-    pub fn set_thread_level<'a>(&'a mut self, thread: LevelFilter) -> &'a mut ConfigBuilder {
+    /// Set at which level and above (more verbose) the thread id shall be logged. (default is Debug)
+    pub fn set_thread_level(&mut self, thread: LevelFilter) -> &mut ConfigBuilder {
         self.0.thread = thread;
         self
     }
 
-    /// Set at which level and below the target shall be logged. (default is Debug)
-    pub fn set_target_level<'a>(&'a mut self, target: LevelFilter) -> &'a mut ConfigBuilder {
+    /// Set at which level and above (more verbose) the target shall be logged. (default is Debug)
+    pub fn set_target_level(&mut self, target: LevelFilter) -> &mut ConfigBuilder {
         self.0.target = target;
         self
     }
 
-    /// Set at which level and below a source code reference shall be logged (default is Trace)
-    pub fn set_location_level<'a>(&'a mut self, location: LevelFilter) -> &'a mut ConfigBuilder {
+    /// Set how the thread should be padded
+    pub fn set_target_padding(&mut self, padding: TargetPadding) -> &mut ConfigBuilder {
+        self.0.target_padding = padding;
+        self
+    }
+
+    /// Set at which level and above (more verbose) a source code reference shall be logged (default is Trace)
+    pub fn set_location_level(&mut self, location: LevelFilter) -> &mut ConfigBuilder {
         self.0.location = location;
         self
     }
 
-    /// Set how the levels should be padded, when logging (default is Left)
-    pub fn set_level_padding<'a>(&'a mut self, padding: LevelPadding) -> &'a mut ConfigBuilder {
+    /// Set how the levels should be padded, when logging (default is Off)
+    pub fn set_level_padding(&mut self, padding: LevelPadding) -> &mut ConfigBuilder {
         self.0.level_padding = padding;
         self
     }
 
     /// Set how the thread should be padded
-    pub fn set_thread_padding<'a>(&'a mut self, padding: ThreadPadding) -> &'a mut ConfigBuilder {
+    pub fn set_thread_padding(&mut self, padding: ThreadPadding) -> &mut ConfigBuilder {
         self.0.thread_padding = padding;
         self
     }
 
     /// Set the mode for logging the thread
-    pub fn set_thread_mode<'a>(&'a mut self, mode: ThreadLogMode) -> &'a mut ConfigBuilder {
+    pub fn set_thread_mode(&mut self, mode: ThreadLogMode) -> &mut ConfigBuilder {
         self.0.thread_log_mode = mode;
         self
     }
 
-    /// Set the color used for printing the level (if the logger supports it)
+    /// Set the color used for printing the level (if the logger supports it),
+    /// or None to use the default foreground color
     #[cfg(feature = "termcolor")]
-    pub fn set_level_color<'a>(&'a mut self, level: Level, color: Color) -> &'a mut ConfigBuilder {
+    pub fn set_level_color(&mut self, level: Level, color: Option<Color>) -> &mut ConfigBuilder {
         self.0.level_color[level as usize] = color;
         self
     }
 
-    /// Set time chrono [strftime] format string.
+    /// Sets the time format to a custom representation.
     ///
-    /// [strftime]: https://docs.rs/chrono/0.4.0/chrono/format/strftime/index.html#specifiers
-    pub fn set_time_format_str<'a>(
-        &'a mut self,
-        time_format: &'static str,
-    ) -> &'a mut ConfigBuilder {
-        self.0.time_format = Cow::Borrowed(time_format);
-        self
-    }
-
-    /// Set time chrono [strftime] format string.
+    /// The easiest way to satisfy the static lifetime of the argument is to directly use the
+    /// re-exported [`time::macros::format_description`] macro.
     ///
-    /// [strftime]: https://docs.rs/chrono/0.4.0/chrono/format/strftime/index.html#specifiers
-    pub fn set_time_format<'a>(&'a mut self, time_format: String) -> &'a mut ConfigBuilder {
-        self.0.time_format = Cow::Owned(time_format);
+    /// *Note*: The default time format is "[hour]:[minute]:[second]".
+    ///
+    /// The syntax for the format_description macro can be found in the
+    /// [`time` crate book](https://time-rs.github.io/book/api/format-description.html).
+    ///
+    /// # Usage
+    ///
+    /// ```
+    /// # use simplelog::{ConfigBuilder, format_description};
+    /// let config = ConfigBuilder::new()
+    ///     .set_time_format_custom(format_description!("[hour]:[minute]:[second].[subsecond]"))
+    ///     .build();
+    /// ```
+    pub fn set_time_format_custom(
+        &mut self,
+        time_format: &'static [FormatItem<'static>],
+    ) -> &mut ConfigBuilder {
+        self.0.time_format = TimeFormat::Custom(time_format);
         self
     }
 
-    /// Set offset used for logging time (default is 0)
-    pub fn set_time_offset<'a>(&'a mut self, time_offset: FixedOffset) -> &'a mut ConfigBuilder {
-        self.0.time_offset = time_offset;
+    /// Set time format string to use rfc2822.
+    pub fn set_time_format_rfc2822(&mut self) -> &mut ConfigBuilder {
+        self.0.time_format = TimeFormat::Rfc2822;
         self
     }
 
-    /// set if you log in local timezone or UTC (default is UTC)
-    pub fn set_time_to_local<'a>(&'a mut self, local: bool) -> &'a mut ConfigBuilder {
-        self.0.time_local = local;
+    /// Set time format string to use rfc3339.
+    pub fn set_time_format_rfc3339(&mut self) -> &mut ConfigBuilder {
+        self.0.time_format = TimeFormat::Rfc3339;
+        self
+    }
+
+    /// Set offset used for logging time (default is UTC)
+    pub fn set_time_offset(&mut self, offset: UtcOffset) -> &mut ConfigBuilder {
+        self.0.time_offset = offset;
+        self
+    }
+
+    /// Sets the offset used to the current local time offset
+    /// (overriding values previously set by [`ConfigBuilder::set_time_offset`]).
+    ///
+    /// This function may fail if the offset cannot be determined soundly.
+    /// This may be the case, when the program is multi-threaded by the time of calling this function.
+    /// One can opt-out of this behavior by setting `RUSTFLAGS="--cfg unsound_local_offset"`.
+    /// Doing so is not recommended, completely untested and may cause unexpected segfaults.
+    #[cfg(feature = "local-offset")]
+    pub fn set_time_offset_to_local(&mut self) -> Result<&mut ConfigBuilder, &mut ConfigBuilder> {
+        match UtcOffset::current_local_offset() {
+            Ok(offset) => {
+                self.0.time_offset = offset;
+                Ok(self)
+            }
+            Err(_) => Err(self),
+        }
+    }
+
+    /// set if you want to write colors in the logfile (default is Off)
+    #[cfg(feature = "ansi_term")]
+    pub fn set_write_log_enable_colors(&mut self, local: bool) -> &mut ConfigBuilder {
+        self.0.write_log_enable_colors = local;
         self
     }
 
@@ -180,12 +246,9 @@ impl ConfigBuilder {
     /// If any are specified, only records from modules starting with one of these entries will be printed
     ///
     /// For example, `add_filter_allow_str("tokio::uds")` would allow only logging from the `tokio` crates `uds` module.
-    pub fn add_filter_allow_str<'a>(
-        &'a mut self,
-        time_format: &'static str,
-    ) -> &'a mut ConfigBuilder {
+    pub fn add_filter_allow_str(&mut self, filter_allow: &'static str) -> &mut ConfigBuilder {
         let mut list = Vec::from(&*self.0.filter_allow);
-        list.push(Cow::Borrowed(time_format));
+        list.push(Cow::Borrowed(filter_allow));
         self.0.filter_allow = Cow::Owned(list);
         self
     }
@@ -194,16 +257,16 @@ impl ConfigBuilder {
     /// If any are specified, only records from modules starting with one of these entries will be printed
     ///
     /// For example, `add_filter_allow(format!("{}{}","tokio", "uds"))` would allow only logging from the `tokio` crates `uds` module.
-    pub fn add_filter_allow<'a>(&'a mut self, time_format: String) -> &'a mut ConfigBuilder {
+    pub fn add_filter_allow(&mut self, filter_allow: String) -> &mut ConfigBuilder {
         let mut list = Vec::from(&*self.0.filter_allow);
-        list.push(Cow::Owned(time_format));
+        list.push(Cow::Owned(filter_allow));
         self.0.filter_allow = Cow::Owned(list);
         self
     }
 
     /// Clear allowed module filters.
     /// If none are specified, nothing is filtered out
-    pub fn clear_filter_allow<'a>(&'a mut self) -> &'a mut ConfigBuilder {
+    pub fn clear_filter_allow(&mut self) -> &mut ConfigBuilder {
         self.0.filter_allow = Cow::Borrowed(&[]);
         self
     }
@@ -212,12 +275,9 @@ impl ConfigBuilder {
     /// If any are specified, records from modules starting with one of these entries will be ignored
     ///
     /// For example, `add_filter_ignore_str("tokio::uds")` would deny logging from the `tokio` crates `uds` module.
-    pub fn add_filter_ignore_str<'a>(
-        &'a mut self,
-        time_format: &'static str,
-    ) -> &'a mut ConfigBuilder {
+    pub fn add_filter_ignore_str(&mut self, filter_ignore: &'static str) -> &mut ConfigBuilder {
         let mut list = Vec::from(&*self.0.filter_ignore);
-        list.push(Cow::Borrowed(time_format));
+        list.push(Cow::Borrowed(filter_ignore));
         self.0.filter_ignore = Cow::Owned(list);
         self
     }
@@ -226,16 +286,16 @@ impl ConfigBuilder {
     /// If any are specified, records from modules starting with one of these entries will be ignored
     ///
     /// For example, `add_filter_ignore(format!("{}{}","tokio", "uds"))` would deny logging from the `tokio` crates `uds` module.
-    pub fn add_filter_ignore<'a>(&'a mut self, time_format: String) -> &'a mut ConfigBuilder {
+    pub fn add_filter_ignore(&mut self, filter_ignore: String) -> &mut ConfigBuilder {
         let mut list = Vec::from(&*self.0.filter_ignore);
-        list.push(Cow::Owned(time_format));
+        list.push(Cow::Owned(filter_ignore));
         self.0.filter_ignore = Cow::Owned(list);
         self
     }
 
     /// Clear ignore module filters.
     /// If none are specified, nothing is filtered
-    pub fn clear_filter_ignore<'a>(&'a mut self) -> &'a mut ConfigBuilder {
+    pub fn clear_filter_ignore(&mut self) -> &mut ConfigBuilder {
         self.0.filter_ignore = Cow::Borrowed(&[]);
         self
     }
@@ -243,6 +303,12 @@ impl ConfigBuilder {
     /// Build new `Config`
     pub fn build(&mut self) -> Config {
         self.0.clone()
+    }
+}
+
+impl Default for ConfigBuilder {
+    fn default() -> Self {
+        ConfigBuilder::new()
     }
 }
 
@@ -256,21 +322,22 @@ impl Default for Config {
             thread_log_mode: ThreadLogMode::IDs,
             thread_padding: ThreadPadding::Off,
             target: LevelFilter::Debug,
+            target_padding: TargetPadding::Off,
             location: LevelFilter::Trace,
-            time_format: Cow::Borrowed("%H:%M:%S"),
-            time_offset: FixedOffset::east(0),
-            time_local: false,
+            time_format: TimeFormat::Custom(format_description!("[hour]:[minute]:[second]")),
+            time_offset: UtcOffset::UTC,
             filter_allow: Cow::Borrowed(&[]),
             filter_ignore: Cow::Borrowed(&[]),
+            write_log_enable_colors: false,
 
             #[cfg(feature = "termcolor")]
             level_color: [
-                Color::White,  // (dummy)
-                Color::Red,    // Error
-                Color::Yellow, // Warn
-                Color::Blue,   // Info
-                Color::Cyan,   // Debug
-                Color::White,  // Trace
+                None,                // Default foreground
+                Some(Color::Red),    // Error
+                Some(Color::Yellow), // Warn
+                Some(Color::Blue),   // Info
+                Some(Color::Cyan),   // Debug
+                Some(Color::White),  // Trace
             ],
         }
     }

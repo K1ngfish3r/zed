@@ -1,6 +1,7 @@
 use crate::front::wgsl::error::{Error, ExpectedToken};
 use crate::front::wgsl::parse::lexer::{Lexer, Token};
 use crate::front::wgsl::parse::number::Number;
+use crate::front::wgsl::Scalar;
 use crate::front::SymbolTable;
 use crate::{Arena, FastIndexSet, Handle, ShaderStage, Span};
 
@@ -277,8 +278,8 @@ impl Parser {
         span: Span,
         ctx: &mut ExpressionContext<'a, '_, '_>,
     ) -> Result<Option<ast::ConstructorType<'a>>, Error<'a>> {
-        if let Some((kind, width)) = conv::get_scalar_type(word) {
-            return Ok(Some(ast::ConstructorType::Scalar { kind, width }));
+        if let Some(scalar) = conv::get_scalar_type(word) {
+            return Ok(Some(ast::ConstructorType::Scalar(scalar)));
         }
 
         let partial = match word {
@@ -288,22 +289,25 @@ impl Parser {
             "vec2i" => {
                 return Ok(Some(ast::ConstructorType::Vector {
                     size: crate::VectorSize::Bi,
-                    kind: crate::ScalarKind::Sint,
-                    width: 4,
+                    scalar: Scalar {
+                        kind: crate::ScalarKind::Sint,
+                        width: 4,
+                    },
                 }))
             }
             "vec2u" => {
                 return Ok(Some(ast::ConstructorType::Vector {
                     size: crate::VectorSize::Bi,
-                    kind: crate::ScalarKind::Uint,
-                    width: 4,
+                    scalar: Scalar {
+                        kind: crate::ScalarKind::Uint,
+                        width: 4,
+                    },
                 }))
             }
             "vec2f" => {
                 return Ok(Some(ast::ConstructorType::Vector {
                     size: crate::VectorSize::Bi,
-                    kind: crate::ScalarKind::Float,
-                    width: 4,
+                    scalar: Scalar::F32,
                 }))
             }
             "vec3" => ast::ConstructorType::PartialVector {
@@ -312,22 +316,19 @@ impl Parser {
             "vec3i" => {
                 return Ok(Some(ast::ConstructorType::Vector {
                     size: crate::VectorSize::Tri,
-                    kind: crate::ScalarKind::Sint,
-                    width: 4,
+                    scalar: Scalar::I32,
                 }))
             }
             "vec3u" => {
                 return Ok(Some(ast::ConstructorType::Vector {
                     size: crate::VectorSize::Tri,
-                    kind: crate::ScalarKind::Uint,
-                    width: 4,
+                    scalar: Scalar::U32,
                 }))
             }
             "vec3f" => {
                 return Ok(Some(ast::ConstructorType::Vector {
                     size: crate::VectorSize::Tri,
-                    kind: crate::ScalarKind::Float,
-                    width: 4,
+                    scalar: Scalar::F32,
                 }))
             }
             "vec4" => ast::ConstructorType::PartialVector {
@@ -336,22 +337,19 @@ impl Parser {
             "vec4i" => {
                 return Ok(Some(ast::ConstructorType::Vector {
                     size: crate::VectorSize::Quad,
-                    kind: crate::ScalarKind::Sint,
-                    width: 4,
+                    scalar: Scalar::I32,
                 }))
             }
             "vec4u" => {
                 return Ok(Some(ast::ConstructorType::Vector {
                     size: crate::VectorSize::Quad,
-                    kind: crate::ScalarKind::Uint,
-                    width: 4,
+                    scalar: Scalar::U32,
                 }))
             }
             "vec4f" => {
                 return Ok(Some(ast::ConstructorType::Vector {
                     size: crate::VectorSize::Quad,
-                    kind: crate::ScalarKind::Float,
-                    width: 4,
+                    scalar: Scalar::F32,
                 }))
             }
             "mat2x2" => ast::ConstructorType::PartialMatrix {
@@ -483,18 +481,18 @@ impl Parser {
         // parse component type if present
         match (lexer.peek().0, partial) {
             (Token::Paren('<'), ast::ConstructorType::PartialVector { size }) => {
-                let (kind, width) = lexer.next_scalar_generic()?;
-                Ok(Some(ast::ConstructorType::Vector { size, kind, width }))
+                let scalar = lexer.next_scalar_generic()?;
+                Ok(Some(ast::ConstructorType::Vector { size, scalar }))
             }
             (Token::Paren('<'), ast::ConstructorType::PartialMatrix { columns, rows }) => {
-                let (kind, width, span) = lexer.next_scalar_generic_with_span()?;
-                match kind {
+                let (scalar, span) = lexer.next_scalar_generic_with_span()?;
+                match scalar.kind {
                     crate::ScalarKind::Float => Ok(Some(ast::ConstructorType::Matrix {
                         columns,
                         rows,
-                        width,
+                        width: scalar.width,
                     })),
-                    _ => Err(Error::BadMatrixScalarKind(span, kind, width)),
+                    _ => Err(Error::BadMatrixScalarKind(span, scalar)),
                 }
             }
             (Token::Paren('<'), ast::ConstructorType::PartialArray) => {
@@ -1045,14 +1043,14 @@ impl Parser {
         columns: crate::VectorSize,
         rows: crate::VectorSize,
     ) -> Result<ast::Type<'a>, Error<'a>> {
-        let (kind, width, span) = lexer.next_scalar_generic_with_span()?;
-        match kind {
+        let (scalar, span) = lexer.next_scalar_generic_with_span()?;
+        match scalar.kind {
             crate::ScalarKind::Float => Ok(ast::Type::Matrix {
                 columns,
                 rows,
-                width,
+                width: scalar.width,
             }),
-            _ => Err(Error::BadMatrixScalarKind(span, kind, width)),
+            _ => Err(Error::BadMatrixScalarKind(span, scalar)),
         }
     }
 
@@ -1062,79 +1060,85 @@ impl Parser {
         word: &'a str,
         ctx: &mut ExpressionContext<'a, '_, '_>,
     ) -> Result<Option<ast::Type<'a>>, Error<'a>> {
-        if let Some((kind, width)) = conv::get_scalar_type(word) {
-            return Ok(Some(ast::Type::Scalar { kind, width }));
+        if let Some(scalar) = conv::get_scalar_type(word) {
+            return Ok(Some(ast::Type::Scalar(scalar)));
         }
 
         Ok(Some(match word {
             "vec2" => {
-                let (kind, width) = lexer.next_scalar_generic()?;
+                let scalar = lexer.next_scalar_generic()?;
                 ast::Type::Vector {
                     size: crate::VectorSize::Bi,
-                    kind,
-                    width,
+                    scalar,
                 }
             }
             "vec2i" => ast::Type::Vector {
                 size: crate::VectorSize::Bi,
-                kind: crate::ScalarKind::Sint,
-                width: 4,
+                scalar: Scalar {
+                    kind: crate::ScalarKind::Sint,
+                    width: 4,
+                },
             },
             "vec2u" => ast::Type::Vector {
                 size: crate::VectorSize::Bi,
-                kind: crate::ScalarKind::Uint,
-                width: 4,
+                scalar: Scalar {
+                    kind: crate::ScalarKind::Uint,
+                    width: 4,
+                },
             },
             "vec2f" => ast::Type::Vector {
                 size: crate::VectorSize::Bi,
-                kind: crate::ScalarKind::Float,
-                width: 4,
+                scalar: Scalar::F32,
             },
             "vec3" => {
-                let (kind, width) = lexer.next_scalar_generic()?;
+                let scalar = lexer.next_scalar_generic()?;
                 ast::Type::Vector {
                     size: crate::VectorSize::Tri,
-                    kind,
-                    width,
+                    scalar,
                 }
             }
             "vec3i" => ast::Type::Vector {
                 size: crate::VectorSize::Tri,
-                kind: crate::ScalarKind::Sint,
-                width: 4,
+                scalar: Scalar {
+                    kind: crate::ScalarKind::Sint,
+                    width: 4,
+                },
             },
             "vec3u" => ast::Type::Vector {
                 size: crate::VectorSize::Tri,
-                kind: crate::ScalarKind::Uint,
-                width: 4,
+                scalar: Scalar {
+                    kind: crate::ScalarKind::Uint,
+                    width: 4,
+                },
             },
             "vec3f" => ast::Type::Vector {
                 size: crate::VectorSize::Tri,
-                kind: crate::ScalarKind::Float,
-                width: 4,
+                scalar: Scalar::F32,
             },
             "vec4" => {
-                let (kind, width) = lexer.next_scalar_generic()?;
+                let scalar = lexer.next_scalar_generic()?;
                 ast::Type::Vector {
                     size: crate::VectorSize::Quad,
-                    kind,
-                    width,
+                    scalar,
                 }
             }
             "vec4i" => ast::Type::Vector {
                 size: crate::VectorSize::Quad,
-                kind: crate::ScalarKind::Sint,
-                width: 4,
+                scalar: Scalar {
+                    kind: crate::ScalarKind::Sint,
+                    width: 4,
+                },
             },
             "vec4u" => ast::Type::Vector {
                 size: crate::VectorSize::Quad,
-                kind: crate::ScalarKind::Uint,
-                width: 4,
+                scalar: Scalar {
+                    kind: crate::ScalarKind::Uint,
+                    width: 4,
+                },
             },
             "vec4f" => ast::Type::Vector {
                 size: crate::VectorSize::Quad,
-                kind: crate::ScalarKind::Float,
-                width: 4,
+                scalar: Scalar::F32,
             },
             "mat2x2" => {
                 self.matrix_scalar_type(lexer, crate::VectorSize::Bi, crate::VectorSize::Bi)?
@@ -1209,8 +1213,8 @@ impl Parser {
                 width: 4,
             },
             "atomic" => {
-                let (kind, width) = lexer.next_scalar_generic()?;
-                ast::Type::Atomic { kind, width }
+                let scalar = lexer.next_scalar_generic()?;
+                ast::Type::Atomic(scalar)
             }
             "ptr" => {
                 lexer.expect_generic_paren('<')?;
@@ -1257,84 +1261,111 @@ impl Parser {
             "sampler" => ast::Type::Sampler { comparison: false },
             "sampler_comparison" => ast::Type::Sampler { comparison: true },
             "texture_1d" => {
-                let (kind, width, span) = lexer.next_scalar_generic_with_span()?;
-                Self::check_texture_sample_type(kind, width, span)?;
+                let (scalar, span) = lexer.next_scalar_generic_with_span()?;
+                Self::check_texture_sample_type(scalar, span)?;
                 ast::Type::Image {
                     dim: crate::ImageDimension::D1,
                     arrayed: false,
-                    class: crate::ImageClass::Sampled { kind, multi: false },
+                    class: crate::ImageClass::Sampled {
+                        kind: scalar.kind,
+                        multi: false,
+                    },
                 }
             }
             "texture_1d_array" => {
-                let (kind, width, span) = lexer.next_scalar_generic_with_span()?;
-                Self::check_texture_sample_type(kind, width, span)?;
+                let (scalar, span) = lexer.next_scalar_generic_with_span()?;
+                Self::check_texture_sample_type(scalar, span)?;
                 ast::Type::Image {
                     dim: crate::ImageDimension::D1,
                     arrayed: true,
-                    class: crate::ImageClass::Sampled { kind, multi: false },
+                    class: crate::ImageClass::Sampled {
+                        kind: scalar.kind,
+                        multi: false,
+                    },
                 }
             }
             "texture_2d" => {
-                let (kind, width, span) = lexer.next_scalar_generic_with_span()?;
-                Self::check_texture_sample_type(kind, width, span)?;
+                let (scalar, span) = lexer.next_scalar_generic_with_span()?;
+                Self::check_texture_sample_type(scalar, span)?;
                 ast::Type::Image {
                     dim: crate::ImageDimension::D2,
                     arrayed: false,
-                    class: crate::ImageClass::Sampled { kind, multi: false },
+                    class: crate::ImageClass::Sampled {
+                        kind: scalar.kind,
+                        multi: false,
+                    },
                 }
             }
             "texture_2d_array" => {
-                let (kind, width, span) = lexer.next_scalar_generic_with_span()?;
-                Self::check_texture_sample_type(kind, width, span)?;
+                let (scalar, span) = lexer.next_scalar_generic_with_span()?;
+                Self::check_texture_sample_type(scalar, span)?;
                 ast::Type::Image {
                     dim: crate::ImageDimension::D2,
                     arrayed: true,
-                    class: crate::ImageClass::Sampled { kind, multi: false },
+                    class: crate::ImageClass::Sampled {
+                        kind: scalar.kind,
+                        multi: false,
+                    },
                 }
             }
             "texture_3d" => {
-                let (kind, width, span) = lexer.next_scalar_generic_with_span()?;
-                Self::check_texture_sample_type(kind, width, span)?;
+                let (scalar, span) = lexer.next_scalar_generic_with_span()?;
+                Self::check_texture_sample_type(scalar, span)?;
                 ast::Type::Image {
                     dim: crate::ImageDimension::D3,
                     arrayed: false,
-                    class: crate::ImageClass::Sampled { kind, multi: false },
+                    class: crate::ImageClass::Sampled {
+                        kind: scalar.kind,
+                        multi: false,
+                    },
                 }
             }
             "texture_cube" => {
-                let (kind, width, span) = lexer.next_scalar_generic_with_span()?;
-                Self::check_texture_sample_type(kind, width, span)?;
+                let (scalar, span) = lexer.next_scalar_generic_with_span()?;
+                Self::check_texture_sample_type(scalar, span)?;
                 ast::Type::Image {
                     dim: crate::ImageDimension::Cube,
                     arrayed: false,
-                    class: crate::ImageClass::Sampled { kind, multi: false },
+                    class: crate::ImageClass::Sampled {
+                        kind: scalar.kind,
+                        multi: false,
+                    },
                 }
             }
             "texture_cube_array" => {
-                let (kind, width, span) = lexer.next_scalar_generic_with_span()?;
-                Self::check_texture_sample_type(kind, width, span)?;
+                let (scalar, span) = lexer.next_scalar_generic_with_span()?;
+                Self::check_texture_sample_type(scalar, span)?;
                 ast::Type::Image {
                     dim: crate::ImageDimension::Cube,
                     arrayed: true,
-                    class: crate::ImageClass::Sampled { kind, multi: false },
+                    class: crate::ImageClass::Sampled {
+                        kind: scalar.kind,
+                        multi: false,
+                    },
                 }
             }
             "texture_multisampled_2d" => {
-                let (kind, width, span) = lexer.next_scalar_generic_with_span()?;
-                Self::check_texture_sample_type(kind, width, span)?;
+                let (scalar, span) = lexer.next_scalar_generic_with_span()?;
+                Self::check_texture_sample_type(scalar, span)?;
                 ast::Type::Image {
                     dim: crate::ImageDimension::D2,
                     arrayed: false,
-                    class: crate::ImageClass::Sampled { kind, multi: true },
+                    class: crate::ImageClass::Sampled {
+                        kind: scalar.kind,
+                        multi: true,
+                    },
                 }
             }
             "texture_multisampled_2d_array" => {
-                let (kind, width, span) = lexer.next_scalar_generic_with_span()?;
-                Self::check_texture_sample_type(kind, width, span)?;
+                let (scalar, span) = lexer.next_scalar_generic_with_span()?;
+                Self::check_texture_sample_type(scalar, span)?;
                 ast::Type::Image {
                     dim: crate::ImageDimension::D2,
                     arrayed: true,
-                    class: crate::ImageClass::Sampled { kind, multi: true },
+                    class: crate::ImageClass::Sampled {
+                        kind: scalar.kind,
+                        multi: true,
+                    },
                 }
             }
             "texture_depth_2d" => ast::Type::Image {
@@ -1410,16 +1441,15 @@ impl Parser {
         }))
     }
 
-    const fn check_texture_sample_type(
-        kind: crate::ScalarKind,
-        width: u8,
-        span: Span,
-    ) -> Result<(), Error<'static>> {
+    const fn check_texture_sample_type(scalar: Scalar, span: Span) -> Result<(), Error<'static>> {
         use crate::ScalarKind::*;
         // Validate according to https://gpuweb.github.io/gpuweb/wgsl/#sampled-texture-type
-        match (kind, width) {
-            (Float | Sint | Uint, 4) => Ok(()),
-            _ => Err(Error::BadTextureSampleType { span, kind, width }),
+        match scalar {
+            Scalar {
+                kind: Float | Sint | Uint,
+                width: 4,
+            } => Ok(()),
+            _ => Err(Error::BadTextureSampleType { span, scalar }),
         }
     }
 
@@ -1589,22 +1619,21 @@ impl Parser {
         lexer: &mut Lexer<'a>,
         ctx: &mut ExpressionContext<'a, '_, '_>,
         block: &mut ast::Block<'a>,
+        brace_nesting_level: u8,
     ) -> Result<(), Error<'a>> {
         self.push_rule_span(Rule::Statement, lexer);
         match lexer.peek() {
             (Token::Separator(';'), _) => {
                 let _ = lexer.next();
                 self.pop_rule_span(lexer);
-                return Ok(());
             }
             (Token::Paren('{'), _) => {
-                let (inner, span) = self.block(lexer, ctx)?;
+                let (inner, span) = self.block(lexer, ctx, brace_nesting_level)?;
                 block.stmts.push(ast::Statement {
                     kind: ast::StatementKind::Block(inner),
                     span,
                 });
                 self.pop_rule_span(lexer);
-                return Ok(());
             }
             (Token::Word(word), _) => {
                 let kind = match word {
@@ -1681,7 +1710,7 @@ impl Parser {
                         let _ = lexer.next();
                         let condition = self.general_expression(lexer, ctx)?;
 
-                        let accept = self.block(lexer, ctx)?.0;
+                        let accept = self.block(lexer, ctx, brace_nesting_level)?.0;
 
                         let mut elsif_stack = Vec::new();
                         let mut elseif_span_start = lexer.start_byte_offset();
@@ -1692,12 +1721,12 @@ impl Parser {
 
                             if !lexer.skip(Token::Word("if")) {
                                 // ... else { ... }
-                                break self.block(lexer, ctx)?.0;
+                                break self.block(lexer, ctx, brace_nesting_level)?.0;
                             }
 
                             // ... else if (...) { ... }
                             let other_condition = self.general_expression(lexer, ctx)?;
-                            let other_block = self.block(lexer, ctx)?;
+                            let other_block = self.block(lexer, ctx, brace_nesting_level)?;
                             elsif_stack.push((elseif_span_start, other_condition, other_block));
                             elseif_span_start = lexer.start_byte_offset();
                         };
@@ -1729,7 +1758,9 @@ impl Parser {
                     "switch" => {
                         let _ = lexer.next();
                         let selector = self.general_expression(lexer, ctx)?;
-                        lexer.expect(Token::Paren('{'))?;
+                        let brace_span = lexer.expect_span(Token::Paren('{'))?;
+                        let brace_nesting_level =
+                            Self::increase_brace_nesting(brace_nesting_level, brace_span)?;
                         let mut cases = Vec::new();
 
                         loop {
@@ -1754,7 +1785,7 @@ impl Parser {
                                         });
                                     };
 
-                                    let body = self.block(lexer, ctx)?.0;
+                                    let body = self.block(lexer, ctx, brace_nesting_level)?.0;
 
                                     cases.push(ast::SwitchCase {
                                         value,
@@ -1764,7 +1795,7 @@ impl Parser {
                                 }
                                 (Token::Word("default"), _) => {
                                     lexer.skip(Token::Separator(':'));
-                                    let body = self.block(lexer, ctx)?.0;
+                                    let body = self.block(lexer, ctx, brace_nesting_level)?.0;
                                     cases.push(ast::SwitchCase {
                                         value: ast::SwitchValue::Default,
                                         body,
@@ -1780,7 +1811,7 @@ impl Parser {
 
                         ast::StatementKind::Switch { selector, cases }
                     }
-                    "loop" => self.r#loop(lexer, ctx)?,
+                    "loop" => self.r#loop(lexer, ctx, brace_nesting_level)?,
                     "while" => {
                         let _ = lexer.next();
                         let mut body = ast::Block::default();
@@ -1804,7 +1835,7 @@ impl Parser {
                             span,
                         });
 
-                        let (block, span) = self.block(lexer, ctx)?;
+                        let (block, span) = self.block(lexer, ctx, brace_nesting_level)?;
                         body.stmts.push(ast::Statement {
                             kind: ast::StatementKind::Block(block),
                             span,
@@ -1827,7 +1858,9 @@ impl Parser {
                             let (_, span) = {
                                 let ctx = &mut *ctx;
                                 let block = &mut *block;
-                                lexer.capture_span(|lexer| self.statement(lexer, ctx, block))?
+                                lexer.capture_span(|lexer| {
+                                    self.statement(lexer, ctx, block, brace_nesting_level)
+                                })?
                             };
 
                             if block.stmts.len() != num_statements {
@@ -1872,7 +1905,7 @@ impl Parser {
                             lexer.expect(Token::Paren(')'))?;
                         }
 
-                        let (block, span) = self.block(lexer, ctx)?;
+                        let (block, span) = self.block(lexer, ctx, brace_nesting_level)?;
                         body.stmts.push(ast::Statement {
                             kind: ast::StatementKind::Block(block),
                             span,
@@ -1934,13 +1967,15 @@ impl Parser {
         &mut self,
         lexer: &mut Lexer<'a>,
         ctx: &mut ExpressionContext<'a, '_, '_>,
+        brace_nesting_level: u8,
     ) -> Result<ast::StatementKind<'a>, Error<'a>> {
         let _ = lexer.next();
         let mut body = ast::Block::default();
         let mut continuing = ast::Block::default();
         let mut break_if = None;
 
-        lexer.expect(Token::Paren('{'))?;
+        let brace_span = lexer.expect_span(Token::Paren('{'))?;
+        let brace_nesting_level = Self::increase_brace_nesting(brace_nesting_level, brace_span)?;
 
         ctx.local_table.push_scope();
 
@@ -1950,7 +1985,9 @@ impl Parser {
                 // the last thing in the loop body
 
                 // Expect a opening brace to start the continuing block
-                lexer.expect(Token::Paren('{'))?;
+                let brace_span = lexer.expect_span(Token::Paren('{'))?;
+                let brace_nesting_level =
+                    Self::increase_brace_nesting(brace_nesting_level, brace_span)?;
                 loop {
                     if lexer.skip(Token::Word("break")) {
                         // Branch for the `break if` statement, this statement
@@ -1979,7 +2016,7 @@ impl Parser {
                         break;
                     } else {
                         // Otherwise try to parse a statement
-                        self.statement(lexer, ctx, &mut continuing)?;
+                        self.statement(lexer, ctx, &mut continuing, brace_nesting_level)?;
                     }
                 }
                 // Since the continuing block must be the last part of the loop body,
@@ -1993,7 +2030,7 @@ impl Parser {
                 break;
             }
             // Otherwise try to parse a statement
-            self.statement(lexer, ctx, &mut body)?;
+            self.statement(lexer, ctx, &mut body, brace_nesting_level)?;
         }
 
         ctx.local_table.pop_scope();
@@ -2010,15 +2047,17 @@ impl Parser {
         &mut self,
         lexer: &mut Lexer<'a>,
         ctx: &mut ExpressionContext<'a, '_, '_>,
+        brace_nesting_level: u8,
     ) -> Result<(ast::Block<'a>, Span), Error<'a>> {
         self.push_rule_span(Rule::Block, lexer);
 
         ctx.local_table.push_scope();
 
-        lexer.expect(Token::Paren('{'))?;
+        let brace_span = lexer.expect_span(Token::Paren('{'))?;
+        let brace_nesting_level = Self::increase_brace_nesting(brace_nesting_level, brace_span)?;
         let mut block = ast::Block::default();
         while !lexer.skip(Token::Paren('}')) {
-            self.statement(lexer, ctx, &mut block)?;
+            self.statement(lexer, ctx, &mut block, brace_nesting_level)?;
         }
 
         ctx.local_table.pop_scope();
@@ -2105,9 +2144,10 @@ impl Parser {
 
         // do not use `self.block` here, since we must not push a new scope
         lexer.expect(Token::Paren('{'))?;
+        let brace_nesting_level = 1;
         let mut body = ast::Block::default();
         while !lexer.skip(Token::Paren('}')) {
-            self.statement(lexer, &mut ctx, &mut body)?;
+            self.statement(lexer, &mut ctx, &mut body, brace_nesting_level)?;
         }
 
         ctx.local_table.pop_scope();
@@ -2140,6 +2180,7 @@ impl Parser {
         let mut early_depth_test = ParsedAttribute::default();
         let (mut bind_index, mut bind_group) =
             (ParsedAttribute::default(), ParsedAttribute::default());
+        let mut id = ParsedAttribute::default();
 
         let mut dependencies = FastIndexSet::default();
         let mut ctx = ExpressionContext {
@@ -2163,14 +2204,19 @@ impl Parser {
                     bind_group.set(self.general_expression(lexer, &mut ctx)?, name_span)?;
                     lexer.expect(Token::Paren(')'))?;
                 }
+                ("id", name_span) => {
+                    lexer.expect(Token::Paren('('))?;
+                    id.set(self.general_expression(lexer, &mut ctx)?, name_span)?;
+                    lexer.expect(Token::Paren(')'))?;
+                }
                 ("vertex", name_span) => {
-                    stage.set(crate::ShaderStage::Vertex, name_span)?;
+                    stage.set(ShaderStage::Vertex, name_span)?;
                 }
                 ("fragment", name_span) => {
-                    stage.set(crate::ShaderStage::Fragment, name_span)?;
+                    stage.set(ShaderStage::Fragment, name_span)?;
                 }
                 ("compute", name_span) => {
-                    stage.set(crate::ShaderStage::Compute, name_span)?;
+                    stage.set(ShaderStage::Compute, name_span)?;
                     compute_span = name_span;
                 }
                 ("workgroup_size", name_span) => {
@@ -2253,6 +2299,30 @@ impl Parser {
 
                 Some(ast::GlobalDeclKind::Const(ast::Const { name, ty, init }))
             }
+            (Token::Word("override"), _) => {
+                let name = lexer.next_ident()?;
+
+                let ty = if lexer.skip(Token::Separator(':')) {
+                    Some(self.type_decl(lexer, &mut ctx)?)
+                } else {
+                    None
+                };
+
+                let init = if lexer.skip(Token::Operation('=')) {
+                    Some(self.general_expression(lexer, &mut ctx)?)
+                } else {
+                    None
+                };
+
+                lexer.expect(Token::Separator(';'))?;
+
+                Some(ast::GlobalDeclKind::Override(ast::Override {
+                    name,
+                    id: id.value,
+                    ty,
+                    init,
+                }))
+            }
             (Token::Word("var"), _) => {
                 let mut var = self.variable_decl(lexer, &mut ctx)?;
                 var.binding = binding.take();
@@ -2316,5 +2386,31 @@ impl Parser {
         }
 
         Ok(tu)
+    }
+
+    const fn increase_brace_nesting(
+        brace_nesting_level: u8,
+        brace_span: Span,
+    ) -> Result<u8, Error<'static>> {
+        // From [spec.](https://gpuweb.github.io/gpuweb/wgsl/#limits):
+        //
+        // > § 2.4. Limits
+        // >
+        // > …
+        // >
+        // > Maximum nesting depth of brace-enclosed statements in a function[:] 127
+        //
+        // _However_, we choose 64 instead because (a) it avoids stack overflows in CI and
+        // (b) we expect the limit to be decreased to 63 based on this conversation in
+        // WebGPU CTS upstream:
+        // <https://github.com/gpuweb/cts/pull/3389#discussion_r1543742701>
+        const BRACE_NESTING_MAXIMUM: u8 = 64;
+        if brace_nesting_level + 1 > BRACE_NESTING_MAXIMUM {
+            return Err(Error::ExceededLimitForNestedBraces {
+                span: brace_span,
+                limit: BRACE_NESTING_MAXIMUM,
+            });
+        }
+        Ok(brace_nesting_level + 1)
     }
 }

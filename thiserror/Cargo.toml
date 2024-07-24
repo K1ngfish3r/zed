@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.56"
 name = "thiserror"
-version = "1.0.60"
+version = "1.0.61"
 authors = ["David Tolnay <dtolnay@gmail.com>"]
 build = "build.rs"
 autobins = false
@@ -93,7 +93,7 @@ name = "test_expr"
 path = "tests/test_expr.rs"
 
 [dependencies.thiserror-impl]
-version = "=1.0.60"
+version = "=1.0.61"
 
 [dev-dependencies.anyhow]
 version = "1.0.73"

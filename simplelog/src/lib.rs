@@ -24,20 +24,32 @@
 mod config;
 mod loggers;
 
-pub use self::config::{Config, ConfigBuilder, LevelPadding, ThreadPadding, ThreadLogMode};
+pub use self::config::{
+    format_description, Config, ConfigBuilder, FormatItem, LevelPadding, TargetPadding,
+    ThreadLogMode, ThreadPadding,
+};
 #[cfg(feature = "test")]
 pub use self::loggers::TestLogger;
 pub use self::loggers::{CombinedLogger, SimpleLogger, WriteLogger};
 #[cfg(feature = "termcolor")]
 pub use self::loggers::{TermLogger, TerminalMode};
 #[cfg(feature = "termcolor")]
-pub use termcolor::Color;
+pub use termcolor::{Color, ColorChoice};
 
 pub use log::{Level, LevelFilter};
 
 use log::Log;
-#[cfg(test)]
+#[cfg(all(test, not(feature = "paris")))]
 use log::*;
+
+#[cfg(feature = "paris")]
+pub(crate) mod paris_macros;
+#[cfg(feature = "paris")]
+#[doc(hidden)]
+pub mod __private {
+    pub use log;
+    pub use paris;
+}
 
 /// Trait to have a common interface to obtain the Level of Loggers
 ///
@@ -100,9 +112,11 @@ mod tests {
                 .set_thread_mode(ThreadLogMode::Names)
                 .build();
 
-            vec.push(
-                WriteLogger::new(LevelFilter::Error, conf_thread_name, File::create("thread_naming.log").unwrap()) as Box<dyn SharedLogger>
-            );
+            vec.push(WriteLogger::new(
+                LevelFilter::Error,
+                conf_thread_name,
+                File::create("thread_naming.log").unwrap(),
+            ) as Box<dyn SharedLogger>);
 
             for elem in vec![
                 LevelFilter::Off,
@@ -125,10 +139,12 @@ mod tests {
                     SimpleLogger::new(LevelFilter::Error, conf.clone()) as Box<dyn SharedLogger>
                 );
                 #[cfg(feature = "termcolor")]
-                vec.push(
-                    TermLogger::new(LevelFilter::Error, conf.clone(), TerminalMode::Mixed)
-                        as Box<dyn SharedLogger>,
-                );
+                vec.push(TermLogger::new(
+                    LevelFilter::Error,
+                    conf.clone(),
+                    TerminalMode::Mixed,
+                    ColorChoice::Auto,
+                ) as Box<dyn SharedLogger>);
                 vec.push(WriteLogger::new(
                     LevelFilter::Error,
                     conf.clone(),
@@ -142,10 +158,12 @@ mod tests {
                     SimpleLogger::new(LevelFilter::Warn, conf.clone()) as Box<dyn SharedLogger>
                 );
                 #[cfg(feature = "termcolor")]
-                vec.push(
-                    TermLogger::new(LevelFilter::Warn, conf.clone(), TerminalMode::Mixed)
-                        as Box<dyn SharedLogger>,
-                );
+                vec.push(TermLogger::new(
+                    LevelFilter::Warn,
+                    conf.clone(),
+                    TerminalMode::Mixed,
+                    ColorChoice::Auto,
+                ) as Box<dyn SharedLogger>);
                 vec.push(WriteLogger::new(
                     LevelFilter::Warn,
                     conf.clone(),
@@ -159,10 +177,12 @@ mod tests {
                     SimpleLogger::new(LevelFilter::Info, conf.clone()) as Box<dyn SharedLogger>
                 );
                 #[cfg(feature = "termcolor")]
-                vec.push(
-                    TermLogger::new(LevelFilter::Info, conf.clone(), TerminalMode::Mixed)
-                        as Box<dyn SharedLogger>,
-                );
+                vec.push(TermLogger::new(
+                    LevelFilter::Info,
+                    conf.clone(),
+                    TerminalMode::Mixed,
+                    ColorChoice::Auto,
+                ) as Box<dyn SharedLogger>);
                 vec.push(WriteLogger::new(
                     LevelFilter::Info,
                     conf.clone(),
@@ -176,10 +196,12 @@ mod tests {
                     SimpleLogger::new(LevelFilter::Debug, conf.clone()) as Box<dyn SharedLogger>
                 );
                 #[cfg(feature = "termcolor")]
-                vec.push(
-                    TermLogger::new(LevelFilter::Debug, conf.clone(), TerminalMode::Mixed)
-                        as Box<dyn SharedLogger>,
-                );
+                vec.push(TermLogger::new(
+                    LevelFilter::Debug,
+                    conf.clone(),
+                    TerminalMode::Mixed,
+                    ColorChoice::Auto,
+                ) as Box<dyn SharedLogger>);
                 vec.push(WriteLogger::new(
                     LevelFilter::Debug,
                     conf.clone(),
@@ -193,10 +215,12 @@ mod tests {
                     SimpleLogger::new(LevelFilter::Trace, conf.clone()) as Box<dyn SharedLogger>
                 );
                 #[cfg(feature = "termcolor")]
-                vec.push(
-                    TermLogger::new(LevelFilter::Trace, conf.clone(), TerminalMode::Mixed)
-                        as Box<dyn SharedLogger>,
-                );
+                vec.push(TermLogger::new(
+                    LevelFilter::Trace,
+                    conf.clone(),
+                    TerminalMode::Mixed,
+                    ColorChoice::Auto,
+                ) as Box<dyn SharedLogger>);
                 vec.push(WriteLogger::new(
                     LevelFilter::Trace,
                     conf.clone(),
@@ -217,7 +241,10 @@ mod tests {
         trace!("Test Trace");
 
         let mut thread_naming = String::new();
-        File::open("thread_naming.log").unwrap().read_to_string(&mut thread_naming).unwrap();
+        File::open("thread_naming.log")
+            .unwrap()
+            .read_to_string(&mut thread_naming)
+            .unwrap();
 
         if let Some(name) = std::thread::current().name() {
             assert!(thread_naming.contains(&format!("({})", name)));

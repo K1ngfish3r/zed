@@ -275,7 +275,7 @@
 //!         }
 //!
 //!         eprintln!("releasing input capture");
-//!         let (x, y) = activated.cursor_position();
+//!         let (x, y) = activated.cursor_position().unwrap();
 //!         let (x, y) = (x as f64, y as f64);
 //!         let cursor_pos = match pos {
 //!             Position::Left => (x + 1., y),
@@ -284,7 +284,7 @@
 //!             Position::Bottom => (x, y + 1.),
 //!         };
 //!         input_capture
-//!             .release(&session, activated.activation_id(), cursor_pos)
+//!             .release(&session, activated.activation_id(), Some(cursor_pos))
 //!             .await?;
 //!     }
 //! }
@@ -354,8 +354,8 @@ struct DisableOptions {}
 #[derive(Default, Debug, SerializeDict, Type)]
 #[zvariant(signature = "dict")]
 struct ReleaseOptions {
-    activation_id: u32,
-    cursor_position: (f64, f64),
+    activation_id: Option<u32>,
+    cursor_position: Option<(f64, f64)>,
 }
 
 /// Indicates that an input capturing session was disabled.
@@ -378,7 +378,7 @@ impl Disabled {
 #[derive(Debug, DeserializeDict, Type)]
 #[zvariant(signature = "dict")]
 struct DeactivatedOptions {
-    activation_id: u32,
+    activation_id: Option<u32>,
 }
 
 /// Indicates that an input capturing session was deactivated.
@@ -394,7 +394,7 @@ impl Deactivated {
 
     /// The same activation_id number as in the corresponding "Activated"
     /// signal.
-    pub fn activation_id(&self) -> u32 {
+    pub fn activation_id(&self) -> Option<u32> {
         self.1.activation_id
     }
 }
@@ -402,9 +402,9 @@ impl Deactivated {
 #[derive(Debug, DeserializeDict, Type)]
 #[zvariant(signature = "dict")]
 struct ActivatedOptions {
-    activation_id: u32,
-    cursor_position: (f32, f32),
-    barrier_id: BarrierID,
+    activation_id: Option<u32>,
+    cursor_position: Option<(f32, f32)>,
+    barrier_id: Option<BarrierID>,
 }
 
 /// Indicates that an input capturing session was activated.
@@ -419,17 +419,17 @@ impl Activated {
     }
 
     /// A number that can be used to synchronize with the transport-layer.
-    pub fn activation_id(&self) -> u32 {
+    pub fn activation_id(&self) -> Option<u32> {
         self.1.activation_id
     }
 
     /// The current cursor position in the same coordinate space as the zones.
-    pub fn cursor_position(&self) -> (f32, f32) {
+    pub fn cursor_position(&self) -> Option<(f32, f32)> {
         self.1.cursor_position
     }
 
     /// The barrier id of the barrier that triggered
-    pub fn barrier_id(&self) -> BarrierID {
+    pub fn barrier_id(&self) -> Option<BarrierID> {
         self.1.barrier_id
     }
 }
@@ -437,7 +437,7 @@ impl Activated {
 #[derive(Debug, DeserializeDict, Type)]
 #[zvariant(signature = "dict")]
 struct ZonesChangedOptions {
-    zone_set: u32,
+    zone_set: Option<u32>,
 }
 
 /// Indicates that zones available to this session changed.
@@ -452,7 +452,7 @@ impl ZonesChanged {
     }
 
     ///  The zone_set ID of the invalidated zone.
-    pub fn zone_set(&self) -> u32 {
+    pub fn zone_set(&self) -> Option<u32> {
         self.1.zone_set
     }
 }
@@ -644,8 +644,8 @@ impl<'a> InputCapture<'a> {
     pub async fn release(
         &self,
         session: &Session<'_, Self>,
-        activation_id: u32,
-        cursor_position: (f64, f64),
+        activation_id: Option<u32>,
+        cursor_position: Option<(f64, f64)>,
     ) -> Result<(), Error> {
         let options = ReleaseOptions {
             activation_id,

@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.75"
 name = "ashpd"
-version = "0.9.0"
+version = "0.9.1"
 authors = ["Bilal Elmoussaoui <bil.elmoussaoui@gmail.com>"]
 exclude = [
     "interfaces/*.xml",
@@ -51,12 +51,6 @@ rustdoc-args = [
     "--generate-link-to-definition",
 ]
 
-[dependencies]
-enumflags2 = "0.7"
-futures-channel = "0.3"
-futures-util = "0.3"
-serde_repr = "0.1"
-
 [dependencies.async-fs]
 version = "2.1.0"
 optional = true
@@ -65,22 +59,31 @@ optional = true
 version = "2.0.0"
 optional = true
 
+[dependencies.enumflags2]
+version = "0.7"
+
+[dependencies.futures-channel]
+version = "0.3"
+
+[dependencies.futures-util]
+version = "0.3"
+
 [dependencies.gdk4wayland]
-version = "0.8"
+version = "0.9"
 optional = true
 package = "gdk4-wayland"
 
 [dependencies.gdk4x11]
-version = "0.8"
+version = "0.9"
 optional = true
 package = "gdk4-x11"
 
 [dependencies.glib]
-version = "0.19"
+version = "0.20"
 optional = true
 
 [dependencies.gtk4]
-version = "0.8"
+version = "0.9"
 optional = true
 
 [dependencies.pipewire]
@@ -98,6 +101,9 @@ optional = true
 [dependencies.serde]
 version = "1.0"
 features = ["derive"]
+
+[dependencies.serde_repr]
+version = "0.1"
 
 [dependencies.tokio]
 version = "1.21"
@@ -126,7 +132,7 @@ version = "0.31"
 optional = true
 
 [dependencies.wayland-protocols]
-version = "0.31"
+version = "0.32"
 features = [
     "unstable",
     "client",
@@ -138,12 +144,12 @@ version = "4.0"
 features = ["url"]
 default-features = false
 
-[dev-dependencies]
-serde_json = "1.0"
-
 [dev-dependencies.reis]
 version = "0.2.0"
 features = ["tokio"]
+
+[dev-dependencies.serde_json]
+version = "1.0"
 
 [features]
 async-std = [

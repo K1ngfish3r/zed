@@ -1,4 +1,7 @@
-use crate::arena::{Handle, UniqueArena};
+use crate::{
+    arena::{Handle, UniqueArena},
+    Scalar,
+};
 
 use super::{Error, LookupExpression, LookupHelper as _};
 
@@ -61,8 +64,11 @@ fn extract_image_coordinates(
     ctx: &mut super::BlockContext,
 ) -> (Handle<crate::Expression>, Option<Handle<crate::Expression>>) {
     let (given_size, kind) = match ctx.type_arena[coordinate_ty].inner {
-        crate::TypeInner::Scalar { kind, .. } => (None, kind),
-        crate::TypeInner::Vector { size, kind, .. } => (Some(size), kind),
+        crate::TypeInner::Scalar(Scalar { kind, .. }) => (None, kind),
+        crate::TypeInner::Vector {
+            size,
+            scalar: Scalar { kind, .. },
+        } => (Some(size), kind),
         ref other => unreachable!("Unexpected texture coordinate {:?}", other),
     };
 
@@ -73,8 +79,7 @@ fn extract_image_coordinates(
                 name: None,
                 inner: crate::TypeInner::Vector {
                     size,
-                    kind,
-                    width: 4,
+                    scalar: Scalar { kind, width: 4 },
                 },
             })
             .expect("Required coordinate type should have been set up by `parse_type_image`!")
@@ -502,11 +507,14 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
                 }
                 spirv::ImageOperands::CONST_OFFSET => {
                     let offset_constant = self.next()?;
-                    let offset_handle = self.lookup_constant.lookup(offset_constant)?.handle;
-                    let offset_handle = ctx.const_expressions.append(
-                        crate::Expression::Constant(offset_handle),
-                        Default::default(),
-                    );
+                    let offset_expr = self
+                        .lookup_constant
+                        .lookup(offset_constant)?
+                        .inner
+                        .to_expr();
+                    let offset_handle = ctx
+                        .global_expressions
+                        .append(offset_expr, Default::default());
                     offset = Some(offset_handle);
                     words_left -= 1;
                 }
